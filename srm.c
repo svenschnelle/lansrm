@@ -517,6 +517,8 @@ static void handle_srm_open(struct srm_client *client, struct srm_file_open *req
 	//	ret.share_bits = -1;
 insert:
 	ret.file_id = ntohl(client_insert_file_entry(client, filename, fd, hdr_offset));
+	srm_send_response(client, req, &ret, sizeof(ret), 0);
+	return;
 error:
 	g_string_free(filename, TRUE);
 	srm_send_response(client, req, &ret, sizeof(ret), error);
