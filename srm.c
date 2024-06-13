@@ -432,6 +432,7 @@ static GString *get_filename(struct srm_client *client, int start, int sets,
 		while(*s != ' ' && *s != '<' && *s != '>' && j++ < 16)
 			g_string_append_c(ret, *s++);
 	}
+	while(g_string_replace(ret, "//", "/", 0));
 	return ret;
 error:
 	g_string_free(ret, TRUE);
@@ -517,6 +518,7 @@ static void handle_srm_open(struct srm_client *client, struct srm_file_open *req
 insert:
 	ret.file_id = ntohl(client_insert_file_entry(client, filename, fd, hdr_offset));
 error:
+	g_string_free(filename, TRUE);
 	srm_send_response(client, req, &ret, sizeof(ret), error);
 }
 
@@ -557,14 +559,17 @@ static void handle_srm_catalog(struct srm_client *client, struct srm_catalog *re
 	if (start < 1)
 		start = 1;
 
-	cnt = 0;
 	GList *p = g_list_nth(names, start - 1);
+	GString *fullname = g_string_sized_new(128);
 	for (cnt = 0;  p && cnt < max; p = g_list_next(p)) {
-		GString *fullname = g_string_sized_new(128);
 		g_string_printf(fullname, "%s/%s", dirname->str, (char *)p->data);
 		if (!get_file_info(fullname, &ret.fi[cnt]))
 			cnt++;
+
 	}
+	g_string_free(fullname, TRUE);
+	g_string_free(dirname, TRUE);
+	g_list_free_full(names, free);
 	srm_debug(SRM_DEBUG_FILE, client, "%s: catalog has %d files\n", __func__, cnt);
 	ret.num_files = htonl(cnt);
 	srm_send_response(client, req, &ret, sizeof(ret), 0);
