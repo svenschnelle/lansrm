@@ -577,6 +577,7 @@ static void handle_srm_catalog(struct srm_client *client, struct srm_catalog *re
 	srm_send_response(client, req, &ret, sizeof(ret), 0);
 	return;
 error:
+	g_string_free(dirname, TRUE);
 	srm_send_response(client, req, &ret, sizeof(ret), SRM_ERRNO_FILE_NOT_FOUND);
 }
 
