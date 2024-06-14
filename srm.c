@@ -381,7 +381,8 @@ error:
 static GString *get_filename(struct srm_client *client, int start, int sets,
 			     struct srm_file_name_set *filenames,
 			     struct srm_volume_header *vh,
-			     struct srm_file_header *fh)
+			     struct srm_file_header *fh,
+			     int *error)
 {
 	GString *ret = g_string_sized_new(128);
 	struct open_file_entry *entry = NULL;
@@ -398,6 +399,7 @@ static GString *get_filename(struct srm_client *client, int start, int sets,
 		entry = g_tree_lookup(client->files, &wd);
 		if (!entry) {
 			srm_debug(SRM_DEBUG_FILE, client, "working directory not present: %d\n", wd);
+			*error = SRM_ERRNO_INVALID_FILE_ID;
 			goto error;
 		}
 		g_string_append(ret, entry->filename->str);
@@ -414,12 +416,14 @@ static GString *get_filename(struct srm_client *client, int start, int sets,
 		addr = get_volume(client, -1, name, NULL);
 		if (addr == -1) {
 			srm_debug(SRM_DEBUG_FILE, client, "%s: failed to get volume %s\n", __func__, name);
+			*error = SRM_ERRNO_VOLUME_NOT_FOUND;
 			goto error;
 		}
 	}
 
 	if (get_volume(client, addr, NULL, &path) == -1) {
 		srm_debug(SRM_DEBUG_FILE, client, "%s: failed to get volume %d\n", __func__, addr);
+		*error = SRM_ERRNO_VOLUME_NOT_FOUND;
 		goto error;
 	}
 	g_string_append_printf(ret, "%s/%s", config.root, path);
@@ -471,11 +475,9 @@ static void handle_srm_open(struct srm_client *client, struct srm_file_open *req
 	int fd , error = 0;
 
 	sets = ntohl(req->fh.file_name_sets);
-	filename = get_filename(client, 0, sets, req->filenames, &req->vh, &req->fh);
-	if (!filename) {
-		errno = SRM_ERRNO_FILE_NOT_FOUND;
+	filename = get_filename(client, 0, sets, req->filenames, &req->vh, &req->fh, &error);
+	if (!filename)
 		goto error;
-	}
 
 	fd = open(filename->str, O_RDWR);
 	if (fd == -1 && errno == EISDIR) {
@@ -520,7 +522,8 @@ insert:
 	srm_send_response(client, req, &ret, sizeof(ret), 0);
 	return;
 error:
-	g_string_free(filename, TRUE);
+	if (filename)
+		g_string_free(filename, TRUE);
 	srm_send_response(client, req, &ret, sizeof(ret), error);
 }
 
@@ -536,13 +539,14 @@ static void handle_srm_catalog(struct srm_client *client, struct srm_catalog *re
 	struct dirent *dirent = NULL;
 	GList *names = NULL;
 	GString *dirname;
+	int error;
 	DIR *dir;
 
 	max = ntohl(req->max_num_files);
 	start = ntohl(req->file_index);
 	sets = ntohl(req->fh.file_name_sets);
 
-	dirname = get_filename(client, 0, sets, req->filenames, &req->vh, &req->fh);
+	dirname = get_filename(client, 0, sets, req->filenames, &req->vh, &req->fh, &error);
 	if (!dirname)
 		goto error;
 
@@ -577,8 +581,9 @@ static void handle_srm_catalog(struct srm_client *client, struct srm_catalog *re
 	srm_send_response(client, req, &ret, sizeof(ret), 0);
 	return;
 error:
-	g_string_free(dirname, TRUE);
-	srm_send_response(client, req, &ret, sizeof(ret), SRM_ERRNO_FILE_NOT_FOUND);
+	if (dirname)
+		g_string_free(dirname, TRUE);
+	srm_send_response(client, req, &ret, sizeof(ret), error);
 }
 
 static void handle_srm_createfile(struct srm_client *client, struct srm_create_file *req)
@@ -591,11 +596,9 @@ static void handle_srm_createfile(struct srm_client *client, struct srm_create_f
 	sets = ntohl(req->fh.file_name_sets);
 	type = ntohl(req->file_code) & 0xffff;
 
-	filename = get_filename(client, 0, sets, req->filenames, &req->vh, &req->fh);
-	if (!filename) {
-		error = SRM_ERRNO_FILE_NOT_FOUND;
+	filename = get_filename(client, 0, sets, req->filenames, &req->vh, &req->fh, &error);
+	if (!filename)
 		goto error;
-	}
 
 	srm_debug(SRM_DEBUG_FILE, client, "%s: CREATE FILE: %s %08x\n", __func__, filename->str, type);
 
@@ -616,7 +619,8 @@ static void handle_srm_createfile(struct srm_client *client, struct srm_create_f
 			error = errno_to_srm_error(client, errno);
 	}
 error:
-	g_string_free(filename, TRUE);
+	if (filename)
+		g_string_free(filename, TRUE);
 	srm_send_response(client, req, &ret, sizeof(ret), error);
 }
 
@@ -625,17 +629,17 @@ static void handle_srm_create_link(struct srm_client *client, struct srm_create_
 	struct srm_return_empty ret = { 0 };
 	GString *old_filename = NULL, *new_filename = NULL;
 	int old_sets, new_sets, purge, err;
-	int error = SRM_ERRNO_FILE_NOT_FOUND;
+	int error;
 
 	old_sets = ntohl(req->fh_old.file_name_sets);
 	new_sets = ntohl(req->fh_new.file_name_sets);
 	purge = ntohl(req->purge_old_link);
 
-	old_filename = get_filename(client, 0, old_sets, req->filenames, &req->vh, &req->fh_old);
+	old_filename = get_filename(client, 0, old_sets, req->filenames, &req->vh, &req->fh_old, &error);
 	if (!old_filename)
 		goto error;
 
-	new_filename = get_filename(client, old_sets, new_sets, req->filenames, &req->vh, &req->fh_new);
+	new_filename = get_filename(client, old_sets, new_sets, req->filenames, &req->vh, &req->fh_new, &error);
 	if (!new_filename)
 		goto error;
 
@@ -649,8 +653,10 @@ static void handle_srm_create_link(struct srm_client *client, struct srm_create_
 
 	error = err ? errno_to_srm_error(client, errno) : 0;
 error:
-	g_string_free(old_filename, TRUE);
-	g_string_free(new_filename, TRUE);
+	if (old_filename)
+		g_string_free(old_filename, TRUE);
+	if (new_filename)
+		g_string_free(new_filename, TRUE);
 	srm_send_response(client, req, &ret, sizeof(ret), error);
 }
 
@@ -705,15 +711,14 @@ static void handle_srm_purgelink(struct srm_client *client, struct srm_purge_lin
 {
 	struct srm_return_empty ret = { 0 };
 	GString *filename;
-	int sets, error = 0;
+	int sets, error;
 
 	sets = ntohl(req->fh.file_name_sets);
 
-	filename = get_filename(client, 0, sets, req->filenames, &req->vh, &req->fh);
-	if (!filename) {
-		error = SRM_ERRNO_FILE_NOT_FOUND;
+	filename = get_filename(client, 0, sets, req->filenames, &req->vh, &req->fh, &error);
+	if (!filename)
 		goto error;
-	}
+
 	srm_debug(SRM_DEBUG_FILE, client, "%s: PURGE LINK %s\n", __func__, filename->str);
 	if (unlink(filename->str) == -1)
 		error = errno_to_srm_error(client, errno);
@@ -772,7 +777,8 @@ static void handle_srm_xchg_open(struct srm_client *client, struct srm_xchg_open
 		goto error;
 	}
 error:
-	g_string_free(tmpname, TRUE);
+	if (tmpname)
+		g_string_free(tmpname, TRUE);
 	srm_send_response(client, req, &ret, sizeof(ret), error);
 }
 
