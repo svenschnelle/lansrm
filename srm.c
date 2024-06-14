@@ -13,11 +13,13 @@
 #include <stdarg.h>
 #include "srm.h"
 
-static void srm_to_c_string(char *s)
+static char *srm_to_c_string(char *s)
 {
-	char *p = (char *)memchr(s, ' ', 16);
-	if (*p)
+	char *p, *ret = strndup(s, SRM_VOLNAME_LENGTH);
+
+	if ((p = strchr(ret, ' ')))
 		*p = '\0';
+	return ret;
 }
 
 static void c_string_to_srm(char *d, char *s)
@@ -43,8 +45,14 @@ static int get_volume(struct srm_client *client, int index, char *name, char **p
 			volname = volumes[j];
 			idx = g_key_file_get_integer(config.keyfile, volname, "volume", NULL);
 
-			if ((name && !strncmp(volname, name, SRM_VOLNAME_LENGTH)) ||
-			    (index == idx)) {
+			if (name && !strncmp(volname, name, SRM_VOLNAME_LENGTH)) {
+				if (path)
+					*path = g_key_file_get_string(config.keyfile, volname, "path", NULL);
+				ret = idx;
+				break;
+			}
+
+			if (index == idx) {
 				if (name)
 					c_string_to_srm(name, volname);
 				if (path)
@@ -141,7 +149,7 @@ static void handle_srm_write(struct srm_client *client, struct srm_write *req)
 
 	ret.actual = htonl(len);
 error:
-	srm_debug(SRM_DEBUG_REQUEST, client, "%s: WRITE offset=%x, requested = %d, written = %zdacc=%d\n",
+	srm_debug(SRM_DEBUG_REQUEST, client, "%s: WRITE offset=%x, requested=%d, written=%zd acc=%d\n",
 		  __func__, offset, requested, len, acc);
 	srm_send_response(client, req, &ret, sizeof(ret), error);
 }
@@ -170,8 +178,8 @@ static void handle_srm_position(struct srm_client *client, struct srm_position *
 	if (lseek(entry->fd, offset, whence) == -1)
 		error = errno_to_srm_error(client, errno);
 error:
-	srm_debug(SRM_DEBUG_REQUEST, client, "%s: POSITION offset=%x, whence = %d, error = %zd\n",
-		  __func__, offset, whence, error);
+	srm_debug(SRM_DEBUG_REQUEST, client, "%s: POSITION id=%x offset=%x, whence=%d, error=%zd\n",
+		  __func__, entry ? entry->client_fd : 0, offset, whence, error);
 	srm_send_response(client, req, &ret, sizeof(ret), error);
 }
 
@@ -215,9 +223,10 @@ static void handle_srm_read(struct srm_client *client, struct srm_read *req)
 	if (len != requested)
 		error = SRM_ERRNO_EOF_ENCOUNTERED;
 error:
-	srm_debug(SRM_DEBUG_REQUEST, client, "%s: READ file id = %x size=%d actual=%zd offset=%x "
-		  "accesscode=%d, hdr_offset=%zx error=%zd\n",
-		  __func__, entry->fd, requested, len, offset, acc, entry->hdr_offset, error);
+	srm_debug(SRM_DEBUG_REQUEST, client, "%s: READ file id=%x size=%d "
+		  "actual=%zd offset=%x accesscode=%d, hdr_offset=%zx error=%zd\n",
+		  __func__, entry ? entry->client_fd : 0,
+		  requested, len, offset, acc, entry->hdr_offset, error);
 	srm_send_response(client, req, &ret, retlen, error);
 }
 
@@ -347,7 +356,7 @@ static void handle_srm_fileinfo(struct srm_client *client, struct srm_fileinfo *
 	ret.fi.share_code = -1;
 	ret.fi.capabilities = -1;
 error:
-	srm_debug(SRM_DEBUG_REQUEST, client, "%s: FILEINFO %d error=%d file=%s\n",
+	srm_debug(SRM_DEBUG_REQUEST, client, "%s: FILEINFO id=%08x error=%d file=%s\n",
 		  __func__, id, error, entry ? entry->filename->str : "");
 	srm_send_response(client, req, &ret, sizeof(ret), error);
 }
@@ -401,7 +410,7 @@ static GString *get_filename(struct srm_client *client, int start, int sets,
 		return ret;
 	}
 
-	srm_debug(SRM_DEBUG_FILE, client, "%s: addr present %d, addr %d, wd=%d, name [%s], %s\n", __func__,
+	srm_debug(SRM_DEBUG_FILE, client, "%s: addr present %d, addr %d, wd=%d, name '%s', %s\n", __func__,
 		present, addr, wd, vh->volume_name, entry ? entry->filename->str : "");
 
 	if (!present) {
@@ -512,10 +521,10 @@ static void handle_srm_open(struct srm_client *client, struct srm_file_open *req
 	ret.max_record_size = htonl(256);
 	//	ret.share_bits = -1;
 insert:
-	ret.file_id = ntohl(client_insert_file_entry(client, filename, fd, hdr_offset));
+	ret.file_id = htonl(client_insert_file_entry(client, filename, fd, hdr_offset));
 error:
-	srm_debug(SRM_DEBUG_REQUEST, client, "%s: OPEN [%s], fd = %d error=%d\n",
-		  __func__, filename ? filename->str : "", fd, error);
+	srm_debug(SRM_DEBUG_REQUEST, client, "%s: OPEN file='%s' fd=%d id=%08x error=%d\n",
+		  __func__, filename ? filename->str : "", fd, ntohl(ret.file_id), error);
 	if (filename && error)
 		g_string_free(filename, TRUE);
 	srm_send_response(client, req, &ret, sizeof(ret), error);
@@ -568,7 +577,7 @@ static void handle_srm_catalog(struct srm_client *client, struct srm_catalog *re
 	g_list_free_full(names, free);
 	ret.num_files = htonl(cnt);
 error:
-	srm_debug(SRM_DEBUG_REQUEST, client, "%s: CAT [%s] start=%d max=%d sets=%d wd=%x results=%d error=%d\n",
+	srm_debug(SRM_DEBUG_REQUEST, client, "%s: CAT '%s' start=%d max=%d sets=%d wd=%x results=%d error=%d\n",
 		  __func__, dirname ? dirname->str : "", start, max, sets, ntohl(req->fh.working_directory), cnt, error);
 	if (dirname)
 		g_string_free(dirname, TRUE);
@@ -652,13 +661,13 @@ error:
 
 static void handle_srm_volstatus(struct srm_client *client, struct srm_volume_status *req)
 {
+	char *driver = srm_to_c_string(req->vh.driver_name);
+	char *catalog = srm_to_c_string(req->vh.catalogue_organization);
+	char *volume = srm_to_c_string(req->vh.volume_name);
+	int index, error = SRM_ERRNO_VOLUME_NOT_FOUND;
 	struct srm_return_volume_status ret = { 0 };
 	uint32_t address;
-	int index, error = SRM_ERRNO_VOLUME_NOT_FOUND;
 
-	srm_to_c_string(req->vh.driver_name);
-	srm_to_c_string(req->vh.catalogue_organization);
-	srm_to_c_string(req->vh.volume_name);
 	address = ntohl(req->vh.device_address.address1);
 
 	if (req->vh.device_address_present) {
@@ -669,9 +678,9 @@ static void handle_srm_volstatus(struct srm_client *client, struct srm_volume_st
 			ret.srmux = 1;
 		}
 	} else {
-		index = get_volume(client, -1, req->vh.volume_name, NULL);
+		index = get_volume(client, -1, volume, NULL);
 		if (index != -1) {
-			srm_debug(SRM_DEBUG_FILE, client, "volume [%s] exists\n", req->vh.volume_name);
+			srm_debug(SRM_DEBUG_FILE, client, "volume '%s' exists\n", volume);
 			memcpy(ret.volname, req->vh.volume_name, SRM_VOLNAME_LENGTH);
 			error = 0;
 			ret.exist = 1;
@@ -684,16 +693,17 @@ static void handle_srm_volstatus(struct srm_client *client, struct srm_volume_st
 		ret.srmux = 1;
 	}
 
-	srm_debug(SRM_DEBUG_REQUEST, client, "%s: VOLSTATUS addr=%d haddr=%d unit=%d"
-		  " volume=%d driver=%s catorg=%s vname=%s present=%x error=%d\n",
-		  __func__, address,
+	srm_debug(SRM_DEBUG_REQUEST, client, "%s: VOLSTATUS vname='%s' driver='%s' catalog='%s' addr=%d haddr=%d unit=%d"
+		  " volnum=%d present=%d error=%d\n",
+		  __func__, volume, driver, catalog, address,
 		  ntohl(req->vh.device_address.haddress),
 		  ntohl(req->vh.device_address.unit_num),
 		  ntohl(req->vh.device_address.volume_num),
-		  req->vh.driver_name,
-		  req->vh.catalogue_organization,
-		  req->vh.volume_name,
-		  ntohl(req->vh.device_address_present), error);
+		  ntohl(req->vh.device_address_present),
+		  error);
+	free(driver);
+	free(catalog);
+	free(volume);
 	srm_send_response(client, req, &ret, sizeof(ret), error);
 }
 
@@ -768,7 +778,7 @@ static void handle_srm_xchg_open(struct srm_client *client, struct srm_xchg_open
 		goto error;
 	}
 error:
-	srm_debug(SRM_DEBUG_REQUEST, client, "XCHG OPEN: %x [%s] <-> %x [%s] error=%d\n",
+	srm_debug(SRM_DEBUG_REQUEST, client, "XCHG OPEN: id1=%x name1='%s' id2=%x name2='%s' error=%d\n",
 		  id1, entry1 ? entry1->filename->str : "", id2, entry2 ? entry2->filename->str : "", error);
 	if (tmpname)
 		g_string_free(tmpname, TRUE);

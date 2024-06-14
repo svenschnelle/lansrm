@@ -15,12 +15,14 @@ struct srm_client;
 void srm_debug(int level, struct srm_client *client, char *fmt, ...);
 
 typedef enum {
-	SRM_DEBUG_RX=1,
-	SRM_DEBUG_TX=2,
-	SRM_DEBUG_FILE=4,
-	SRM_DEBUG_SOCKET=8,
-	SRM_DEBUG_XFER=16,
-	SRM_DEBUG_CONNECT=32
+	SRM_DEBUG_REQUEST=1,
+	SRM_DEBUG_RESPONSE=2,
+	SRM_DEBUG_CONNECT=4,
+	SRM_DEBUG_XFER=8,
+	SRM_DEBUG_FILE=16,
+	SRM_DEBUG_PACKET_RX=32,
+	SRM_DEBUG_PACKET_TX=64,
+	SRM_DEBUG_ERROR=128
 } srm_debug_level_t;
 
 struct config {

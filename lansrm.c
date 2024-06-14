@@ -19,14 +19,9 @@ struct config config;
 
 static void hexdump(uint8_t *buf, size_t len)
 {
-#if 0
 	while(len--)
 		printf("%02X ", *buf++);
 	printf("\n");
-#else
-	(void)buf;
-	(void)len;
-#endif
 }
 
 void srm_debug(int level, struct srm_client *client, char *fmt, ...)
@@ -62,8 +57,8 @@ static void handle_srm_xfer(struct srm_client *client, struct srm_request_xfer *
 
 	if (len < (ssize_t)sizeof(*xfer))
 		return;
-	hexdump(xfer->data, len - sizeof(*xfer));
-
+	if (config.debug & SRM_DEBUG_PACKET_RX)
+		hexdump(xfer->data, len - sizeof(*xfer));
 	srm_handle_request(client, xfer->data, len - sizeof(*xfer));
 }
 
@@ -78,12 +73,12 @@ void lansrm_send(struct srm_client *client, void *buf, size_t len)
 	memcpy(xfer->data, buf, len);
 
 	xfer->rec_type = htons(SRM_REPLY_XFER);
-
-	hexdump((uint8_t *)&tmp, len + sizeof(struct srm_request_xfer));
+	if (config.debug & SRM_DEBUG_PACKET_TX)
+		hexdump((uint8_t *)&tmp, len + sizeof(struct srm_request_xfer));
 
 	if (sendto(client->fd, tmp, sizeof(struct srm_request_xfer) + len, 0,
 		   (struct sockaddr *)&client->addr, sizeof(struct sockaddr_in)) == -1)
-		srm_debug(SRM_DEBUG_SOCKET, client, "sendto: %m\n");
+		srm_debug(SRM_DEBUG_ERROR, client, "sendto: %m\n");
 }
 
 static int lansrm_file_compare(const void *a, const void *b)
@@ -193,7 +188,7 @@ static void handle_srm_connect(struct srm_request_connect *req, GTree *clients, 
 
 	if (sendto(fd, &reply, sizeof(reply), 0,
 		   (struct sockaddr *)&bcaddr, sizeof(bcaddr)) == -1) {
-		srm_debug(SRM_DEBUG_SOCKET, client, "sendto: %m\n");
+		srm_debug(SRM_DEBUG_ERROR, client, "sendto: %m\n");
 		g_tree_remove(clients, &client->addr);
 		goto error;
 	}
@@ -210,14 +205,14 @@ static void handle_rx(int fd, GTree *clients, struct sockaddr_in *addr,
 	struct srm_client *client;
 
 	if (!inet_ntop(AF_INET, &addr->sin_addr.s_addr, ipstr, addrlen)) {
-		srm_debug(SRM_DEBUG_RX, NULL, "%s: inet_ntop: %m\n", __func__);
+		srm_debug(SRM_DEBUG_PACKET_RX, NULL, "%s: inet_ntop: %m\n", __func__);
 		return;
 	}
 
 	switch (ntohs(*(uint16_t *)buf)) {
 	case SRM_REQUEST_CONNECT:
 		if (len < sizeof(struct srm_request_connect)) {
-			srm_debug(SRM_DEBUG_RX, NULL, "short srm request: %zd bytes\n", len);
+			srm_debug(SRM_DEBUG_ERROR, NULL, "short srm request: %zd bytes\n", len);
 			break;
 		}
 		handle_srm_connect(buf, clients, fd, addr, addrlen, ipstr);
@@ -225,13 +220,13 @@ static void handle_rx(int fd, GTree *clients, struct sockaddr_in *addr,
 
 	case SRM_REQUEST_XFER:
 		if (len < sizeof(struct srm_request_xfer)) {
-			srm_debug(SRM_DEBUG_RX, NULL, "short srm request: %zd bytes\n", len);
+			srm_debug(SRM_DEBUG_ERROR, NULL, "short srm request: %zd bytes\n", len);
 			break;
 		}
 		client = g_tree_lookup(clients, addr);
 		// TODO: avoid copy
 		if (!client) {
-			srm_debug(SRM_DEBUG_SOCKET, client, "client without connect: %s\n", ipstr);
+			srm_debug(SRM_DEBUG_ERROR, client, "client without connect: %s\n", ipstr);
 			client = srm_new_client(clients, fd, addr, addrlen, NULL, NULL);
 			client->hostname = g_strdup(ipstr);
 			memcpy(&client->addr, addr, sizeof(struct sockaddr_in));
@@ -262,7 +257,7 @@ static int loop(GTree *clients, int fd)
 		tval.tv_sec = 1;
 		tval.tv_usec = 0;
 		if (select(fd+1, &rfds, &wfds, &efds, &tval) == -1) {
-			srm_debug(SRM_DEBUG_SOCKET, NULL, "select failed: %m\n");
+			srm_debug(SRM_DEBUG_ERROR, NULL, "select failed: %m\n");
 			return 1;
 		}
 
@@ -277,7 +272,7 @@ static int loop(GTree *clients, int fd)
 		}
 
 		if (FD_ISSET(fd, &efds)) {
-			srm_debug(SRM_DEBUG_SOCKET, NULL, "exception on socket\n");
+			srm_debug(SRM_DEBUG_ERROR, NULL, "exception on socket\n");
 			return 1;
 		}
 	}
@@ -291,7 +286,7 @@ static int create_socket(char *dev)
 
 	fd = socket(AF_INET, SOCK_DGRAM, SOL_UDP);
 	if (fd == -1) {
-		srm_debug(SRM_DEBUG_SOCKET, NULL, "failed to create socket: %m\n");
+		srm_debug(SRM_DEBUG_ERROR, NULL, "failed to create socket: %m\n");
 		return -1;
 	}
 
@@ -300,19 +295,19 @@ static int create_socket(char *dev)
 	addr.sin_family = AF_INET;
 
 	if (setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &on, sizeof(on)) == -1) {
-		srm_debug(SRM_DEBUG_SOCKET, NULL, "failed to set SO_BROADCAST: %m\n");
+		srm_debug(SRM_DEBUG_ERROR, NULL, "failed to set SO_BROADCAST: %m\n");
 		close(fd);
 		return -1;
 	}
 
 	if (dev && setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, dev, strlen(dev)) == -1) {
-		srm_debug(SRM_DEBUG_SOCKET, NULL, "failed to set SO_BINDTODEVICE: %m\n");
+		srm_debug(SRM_DEBUG_ERROR, NULL, "failed to set SO_BINDTODEVICE: %m\n");
 		close(fd);
 		return -1;
 	}
 
 	if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) == -1) {
-		srm_debug(SRM_DEBUG_SOCKET, NULL, "failed to bind socket: %m\n");
+		srm_debug(SRM_DEBUG_ERROR, NULL, "failed to bind socket: %m\n");
 		close(fd);
 		return -1;
 	}
@@ -330,13 +325,17 @@ static void usage(char *name)
 	printf("%s: usage:\n"
 	       "-i, --interface <interface>  listen on interface <interface>\n"
 	       "-f, --foreground             don't fork into background\n"
+	       "-c, --chroot <directory>     chroot to <directory>\n"
+	       "-r, --root <directory>       use <directory> as base for SRM files\n"
 	       "-d, --debug <level>          set debug level to <level>\n"
-	       "        1 = RX\n"
-	       "        2 = TX\n"
-	       "        4 = FILE\n"
-	       "        8 = SOCKET\n"
-	       "       16 = XFER\n"
-	       "       32 = CONNECT\n", name);
+	       "        1 = REQUEST\n"
+	       "        2 = RESPONSE\n"
+	       "        4 = CONNECT\n"
+	       "        8 = XFER\n"
+	       "       16 = FILE\n"
+	       "       32 = PACKET_RX\n"
+	       "       64 = PACKET_TX\n"
+	       "      128 = ERROR\n", name);
 }
 
 static const struct option longopts[] = {
