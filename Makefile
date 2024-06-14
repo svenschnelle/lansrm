@@ -12,3 +12,6 @@ lansrm: $(OBJS)
 
 clean:
 	rm -f $(OBJS) lansrm
+
+install:
+	install -m 0755 lansrm /usr/sbin
