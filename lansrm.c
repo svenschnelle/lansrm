@@ -134,6 +134,77 @@ static int srm_connect_fill_ip_node(struct srm_reply *reply, struct srm_client *
 	return 0;
 }
 
+static struct srm_volume *srm_read_volume(struct srm_client *client, char *name)
+{
+	struct srm_volume *ret;
+	GError *gerr = NULL;
+	int  index, fd;
+	char *path;
+	DIR *dir;
+
+	index = g_key_file_get_integer(config.keyfile, name, "volume", &gerr);
+	if (gerr) {
+		srm_debug(SRM_DEBUG_ERROR, client, "failed to fetch index for volume %s: %s\n",
+			  name, gerr->message);
+		g_error_free(gerr);
+		return NULL;
+	}
+
+	path = g_key_file_get_string(config.keyfile, name, "path", &gerr);
+	if (!path) {
+		srm_debug(SRM_DEBUG_ERROR, client, "failed to fetch path for volume %s: %s\n",
+			  name, gerr->message);
+		g_error_free(gerr);
+		return NULL;
+	}
+
+	dir = opendir(path);
+	if (!dir) {
+		srm_debug(SRM_DEBUG_ERROR, client, "opendir %s failed while adding volume %s: %m\n", path, name);
+		g_free(path);
+		return NULL;
+	}
+
+	fd = dirfd(dir);
+	if (fd == -1) {
+		srm_debug(SRM_DEBUG_ERROR, client, "dirfd failed while adding volume %s: %m\n", name);
+		closedir(dir);
+		g_free(path);
+		return NULL;
+	}
+	ret = g_new0(struct srm_volume, 1);
+	ret->name = g_strdup(name);
+	ret->index = index;
+	ret->path = path;
+	ret->dirfd = fd;
+	ret->dir = dir;
+	return ret;
+}
+
+static void srm_read_volumes(struct srm_client *client)
+{
+	gchar *keys[] = { client->hostname, "global" };
+	struct srm_volume *vol;
+	gchar **volumes;
+	unsigned int i, j;
+	int ret = -1;
+	gsize volcount;
+
+	for (i = 0; ret == -1 && i < ARRAY_SIZE(keys); i++) {
+		volumes = g_key_file_get_string_list(config.keyfile, keys[i], "volumes", &volcount, NULL);
+		if (!volumes)
+			continue;
+		for(j = 0; j < volcount; j++) {
+			vol = srm_read_volume(client, volumes[j]);
+			if (!vol)
+				continue;
+			srm_debug(SRM_DEBUG_CONNECT, client, "adding volume %d: %s\n", vol->index, vol->name);
+				client->volumes = g_list_append(client->volumes, vol);
+		}
+		g_strfreev(volumes);
+	}
+}
+
 static struct srm_client *srm_new_client(GTree *clients, int fd, struct sockaddr_in *addr,
 					 socklen_t addrlen, char *hwaddr_string,
 					 struct srm_reply *reply)
@@ -170,7 +241,7 @@ static void handle_srm_connect(struct srm_request_connect *req, GTree *clients, 
 		 hwaddr[0], hwaddr[1], hwaddr[2], hwaddr[3], hwaddr[4], hwaddr[5]);
 
 	client = srm_new_client(clients, fd, addr, addrlen, hwaddr_string, &reply);
-
+	srm_read_volumes(client);
 	srm_debug(SRM_DEBUG_CONNECT, client, "%s: code=%d, option=%d, node=%d, version=%d, station=%s host=%s\n",
 		  __func__, ntohs(req->ret_code), ntohs(req->option_code),
 		  ntohs(req->host_node), ntohs(req->version),
@@ -238,6 +309,7 @@ static void handle_rx(int fd, GTree *clients, struct sockaddr_in *addr,
 			} else {
 				client = srm_new_client(clients, fd, addr, addrlen, NULL, NULL);
 				client->hostname = g_strdup(ipstr);
+				srm_read_volumes(client);
 				memcpy(&client->addr, addr, sizeof(struct sockaddr_in));
 			}
 			break;
@@ -416,6 +488,7 @@ int main(int argc, char **argv)
 	}
 
 	if (config.chroot && chroot(config.chroot) == -1) {
+		chdir("/");
 		fprintf(stderr, "chroot: %m\n");
 		return 1;
 	}

@@ -28,42 +28,26 @@ static void c_string_to_srm(char *d, char *s)
 	memcpy(d, s, MIN(SRM_VOLNAME_LENGTH, strlen(s)));
 }
 
-static int get_volume(struct srm_client *client, int index, char *name, char **path)
+static struct srm_volume *get_volume_by_name(struct srm_client *client, char *name)
 {
-	gchar *keys[] = { client->hostname, "global" };
-	gchar **volumes, *volname;
-	unsigned int i, j;
-	int idx, ret = -1;
-	gsize length;
+	for (GList *p = client->volumes; p; p = g_list_next(p)) {
+		struct srm_volume *volume = p->data;
 
-	for (i = 0; ret == -1 && i < ARRAY_SIZE(keys); i++) {
-		volumes = g_key_file_get_string_list(config.keyfile, keys[i], "volumes", &length, NULL);
-		if (!volumes)
-			continue;
-
-		for(j = 0; j < length; j++) {
-			volname = volumes[j];
-			idx = g_key_file_get_integer(config.keyfile, volname, "volume", NULL);
-
-			if (name && !strncmp(volname, name, SRM_VOLNAME_LENGTH)) {
-				if (path)
-					*path = g_key_file_get_string(config.keyfile, volname, "path", NULL);
-				ret = idx;
-				break;
-			}
-
-			if (index == idx) {
-				if (name)
-					c_string_to_srm(name, volname);
-				if (path)
-					*path = g_key_file_get_string(config.keyfile, volname, "path", NULL);
-				ret = idx;
-				break;
-			}
-		}
-		g_strfreev(volumes);
+		if (!strcmp(volume->name, name))
+			return volume;
 	}
-	return ret;
+	return NULL;
+}
+
+static struct srm_volume *get_volume_by_index(struct srm_client *client, int index)
+{
+	for (GList *p = client->volumes; p; p = g_list_next(p)) {
+		struct srm_volume *volume = p->data;
+
+		if (volume->index == index)
+			return volume;
+	}
+	return NULL;
 }
 
 static void srm_send_response(struct srm_client *client, void *request, void *response,
@@ -93,9 +77,9 @@ static void handle_srm_areyoualive(struct srm_client *client, void *buf)
 	/* Not used with LAN SRM? */
 }
 
-static int errno_to_srm_error(struct srm_client *client, int _errno)
+static int errno_to_srm_error(struct srm_client *client)
 {
-	switch(_errno) {
+	switch(errno) {
 	case 0:
 		return 0;
 	case ENOENT:
@@ -108,8 +92,7 @@ static int errno_to_srm_error(struct srm_client *client, int _errno)
 	case EIO:
 		return SRM_ERRNO_VOLUME_IO_ERROR;
 	default:
-		srm_debug(SRM_DEBUG_FILE, client, "%s: unhandled errno %d (%s)\n",
-			__func__, _errno, strerror(_errno));
+		srm_debug(SRM_DEBUG_FILE, client, "%s: unhandled errno %d (%m)\n", __func__);
 		return SRM_ERRNO_SOFTWARE_BUG;
 	}
 }
@@ -137,13 +120,13 @@ static void handle_srm_write(struct srm_client *client, struct srm_write *req)
 		goto error;
 
 	if ((acc == 0 && lseek(entry->fd, offset + entry->hdr_offset, SEEK_SET) == -1)) {
-		error = errno_to_srm_error(client, errno);
+		error = errno_to_srm_error(client);
 		goto error;
 	}
 
 	len = write(entry->fd, req->data, requested);
 	if (len == -1) {
-		error = errno_to_srm_error(client, errno);
+		error = errno_to_srm_error(client);
 		goto error;
 	}
 
@@ -176,7 +159,7 @@ static void handle_srm_position(struct srm_client *client, struct srm_position *
 		offset += entry->hdr_offset;
 
 	if (lseek(entry->fd, offset, whence) == -1)
-		error = errno_to_srm_error(client, errno);
+		error = errno_to_srm_error(client);
 error:
 	srm_debug(SRM_DEBUG_REQUEST, client, "%s: POSITION id=%x offset=%x, whence=%d, error=%zd\n",
 		  __func__, entry ? entry->client_fd : 0, offset, whence, error);
@@ -203,7 +186,7 @@ static void handle_srm_read(struct srm_client *client, struct srm_read *req)
 	}
 
 	if (acc == 0 && lseek(entry->fd, offset + entry->hdr_offset, SEEK_SET) == -1) {
-		error = errno_to_srm_error(client, errno);
+		error = errno_to_srm_error(client);
 		goto error;
 	}
 
@@ -212,7 +195,7 @@ static void handle_srm_read(struct srm_client *client, struct srm_read *req)
 
 	len = read(entry->fd, ret.data, requested);
 	if (len == -1) {
-		ret.hdr.status = htonl(errno_to_srm_error(client, errno));
+		ret.hdr.status = htonl(errno_to_srm_error(client));
 		len = 0;
 	}
 
@@ -282,7 +265,7 @@ static off_t srm_file_size(off_t size, off_t hdr_offset)
 	return (off_t)(size - hdr_offset);
 }
 
-static int get_file_info(GString *filename, struct srm_file_info *fi)
+static int get_file_info(char *filename, struct srm_file_info *fi)
 
 {
 	uint16_t lif_type = 0xffff;
@@ -291,13 +274,13 @@ static int get_file_info(GString *filename, struct srm_file_info *fi)
 	off_t hdr_offset;
 	char *p;
 
-	if (lstat(filename->str, &stbuf) == -1)
+	if (lstat(filename, &stbuf) == -1)
 		return -1;
 
 	fi->perm = htons(stbuf.st_mode & 0777);
 
 	if (S_ISREG(stbuf.st_mode)) {
-		int fd = open(filename->str, O_RDONLY);
+		int fd = open(filename, O_RDONLY);
 		if (fd == -1)
 			return -1;
 		get_lif_info(fd, &lif_type, &bootaddr, &hdr_offset);
@@ -324,10 +307,10 @@ static int get_file_info(GString *filename, struct srm_file_info *fi)
 	unix_to_srm_time(&fi->creation_date, &stbuf.st_ctime, stbuf.st_uid);
 
 
-	if ((p = strrchr(filename->str, '/')))
+	if ((p = strrchr(filename, '/')))
 		p++;
 	else
-		p = filename->str;
+		p = filename;
 	c_string_to_srm(fi->filename, p);
 	return 0;
 }
@@ -345,8 +328,8 @@ static void handle_srm_fileinfo(struct srm_client *client, struct srm_fileinfo *
 		goto error;
 	}
 
-	if (get_file_info(entry->filename, &ret.fi)) {
-		error = errno_to_srm_error(client, errno);
+	if (get_file_info(entry->filename->str, &ret.fi)) {
+		error = errno_to_srm_error(client);
 		goto error;
 	}
 
@@ -382,69 +365,90 @@ error:
 	srm_send_response(client, req, &ret, sizeof(ret), error);
 }
 
-static GString *get_filename(struct srm_client *client, int start, int sets,
-			     struct srm_file_name_set *filenames,
-			     struct srm_volume_header *vh,
-			     struct srm_file_header *fh,
-			     int *error)
+static GString *srm_filename_from_fh(struct srm_file_header *fh, struct srm_file_name_set *names)
 {
 	GString *ret = g_string_sized_new(128);
-	struct open_file_entry *entry = NULL;
-	char name[32], *p, *path;
-	int wd, addr, present;
 
-
-	wd = ntohl(vh->device_address.address1);
-	present = ntohl(vh->device_address_present);
-	wd = ntohl(fh->working_directory);
-	addr = ntohl(vh->device_address.address1);
-
-	if (wd > 0) {
-		entry = g_tree_lookup(client->files, &wd);
-		if (!entry) {
-			srm_debug(SRM_DEBUG_FILE, client, "working directory not present: %d\n", wd);
-			*error = SRM_ERRNO_INVALID_FILE_ID;
-			goto error;
-		}
-		g_string_append(ret, entry->filename->str);
-		return ret;
-	}
-
-	srm_debug(SRM_DEBUG_FILE, client, "%s: addr present %d, addr %d, wd=%d, name '%s', %s\n", __func__,
-		present, addr, wd, vh->volume_name, entry ? entry->filename->str : "");
-
-	if (!present) {
-		memcpy(name, vh->volume_name, SRM_VOLNAME_LENGTH);
-		if ((p = (char *)memchr(name, ' ', SRM_VOLNAME_LENGTH)))
-			*p = '\0';
-		addr = get_volume(client, -1, name, NULL);
-		if (addr == -1) {
-			srm_debug(SRM_DEBUG_FILE, client, "%s: failed to get volume %s\n", __func__, name);
-			*error = SRM_ERRNO_VOLUME_NOT_FOUND;
-			goto error;
-		}
-	}
-
-	if (get_volume(client, addr, NULL, &path) == -1) {
-		srm_debug(SRM_DEBUG_FILE, client, "%s: failed to get volume %d\n", __func__, addr);
-		*error = SRM_ERRNO_VOLUME_NOT_FOUND;
-		goto error;
-	}
-	g_string_append_printf(ret, "%s/%s", config.root, path);
-	g_free(path);
-
-	for(int i = start; i < start + sets; i++) {
+	for(unsigned int i = 0; i < ntohl(fh->file_name_sets); i++) {
 		g_string_append_c(ret, '/');
-		char *s = filenames[i].file_name;
+		char *s = names[i].file_name;
 		int j = 0;
 		while(*s != ' ' && *s != '<' && *s != '>' && j++ < 16)
 			g_string_append_c(ret, *s++);
 	}
 	while(g_string_replace(ret, "//", "/", 0));
 	return ret;
+}
+
+static struct srm_volume *srm_volume_from_vh(struct srm_client *client,
+					     struct srm_volume_header *vh,
+					     int *error)
+{
+	struct open_file_entry *entry = NULL;
+	struct srm_volume *volume;
+	int addr, present;
+	char *name;
+
+	present = ntohl(vh->device_address_present);
+	addr = ntohl(vh->device_address.address1);
+
+	srm_debug(SRM_DEBUG_FILE, client, "%s: addr present %d, addr %d, name '%s', %s\n", __func__,
+		present, addr, vh->volume_name, entry ? entry->filename->str : "");
+
+	if (!present) {
+		name = srm_to_c_string(vh->volume_name);
+		volume = get_volume_by_name(client, name);
+		if (!volume) {
+			srm_debug(SRM_DEBUG_FILE, client, "%s: failed to get volume %s\n", __func__, name);
+			free(name);
+			*error = SRM_ERRNO_VOLUME_NOT_FOUND;
+			goto error;
+		}
+		free(name);
+	} else {
+		volume = get_volume_by_index(client, addr);
+		if (!volume) {
+			srm_debug(SRM_DEBUG_FILE, client, "%s: failed to get volume %d\n", __func__, addr);
+			*error = SRM_ERRNO_VOLUME_NOT_FOUND;
+			goto error;
+		}
+	}
+	return volume;
 error:
-	g_string_free(ret, TRUE);
 	return NULL;
+}
+
+static GString *srm_get_filename(struct srm_client *client,
+				 struct srm_volume_header *vh,
+				 struct srm_file_header *fh,
+				 struct srm_file_name_set *names,
+				 int *error)
+{
+	struct srm_volume *volume;
+	struct open_file_entry *entry;
+	GString *ret, *filename;
+
+	int wd = ntohl(fh->working_directory);
+
+	volume = srm_volume_from_vh(client, vh, error);
+	if (!volume)
+		return NULL;
+
+	ret = g_string_new(volume->path);
+	if (wd) {
+		entry = g_tree_lookup(client->files, &wd);
+		if (!entry) {
+			*error = SRM_ERRNO_INVALID_FILE_ID;
+			return NULL;
+		}
+		g_string_append_printf(ret, "/%s", entry->filename->str);
+	}
+
+	filename = srm_filename_from_fh(fh, names);
+	if (filename->len)
+		g_string_append_printf(ret, "/%s", filename->str);
+	g_string_free(filename, TRUE);
+	return ret;
 }
 
 static int client_insert_file_entry(struct srm_client *client, GString *filename,
@@ -471,15 +475,14 @@ static void handle_srm_open(struct srm_client *client, struct srm_file_open *req
 {
 	struct srm_return_file_open ret = { 0 };
 	struct open_file_entry *entry;
-	uint32_t sets, bootaddr = 0;
+	uint32_t bootaddr = 0;
 	struct stat stbuf = { 0 };
 	int fd = -1, error = 0;
 	uint16_t lif_type = 0;
 	off_t hdr_offset = 0;
 	GString *filename;
 
-	sets = ntohl(req->fh.file_name_sets);
-	filename = get_filename(client, 0, sets, req->filenames, &req->vh, &req->fh, &error);
+	filename = srm_get_filename(client, &req->vh, &req->fh, req->filenames, &errno);
 	if (!filename)
 		goto error;
 
@@ -499,18 +502,18 @@ static void handle_srm_open(struct srm_client *client, struct srm_file_open *req
 	}
 
 	if (fd == -1) {
-		error = errno_to_srm_error(client, errno);
+		error = errno_to_srm_error(client);
 		goto error;
 	}
 
 	if (fstat(fd, &stbuf) == -1) {
-		error = errno_to_srm_error(client, errno);
+		error = errno_to_srm_error(client);
 		goto error;
 	}
 
 	get_lif_info(fd, &lif_type, &bootaddr, &hdr_offset);
 	if (lseek(fd, hdr_offset, SEEK_SET) == -1) {
-		errno = errno_to_srm_error(client, errno);
+		errno = errno_to_srm_error(client);
 		goto error;
 	}
 
@@ -538,24 +541,25 @@ static int srm_dir_compare(const void *a, const void *b)
 static void handle_srm_catalog(struct srm_client *client, struct srm_catalog *req)
 {
 	struct srm_return_catalog ret = { 0 };
-	int start, max, sets, cnt = 0;
+	int start, max, cnt = 0;
 	struct dirent *dirent = NULL;
+	GString *dirname = NULL;
 	GList *names = NULL;
-	GString *dirname;
 	int error = 0;
 	DIR *dir;
 
 	max = ntohl(req->max_num_files);
 	start = ntohl(req->file_index);
-	sets = ntohl(req->fh.file_name_sets);
 
-	dirname = get_filename(client, 0, sets, req->filenames, &req->vh, &req->fh, &error);
+	dirname = srm_get_filename(client, &req->vh, &req->fh, req->filenames, &error);
 	if (!dirname)
 		goto error;
 
 	dir = opendir(dirname->str);
-	if (!dir)
+	if (!dir) {
+		error = errno_to_srm_error(client);
 		goto error;
+	}
 
 	while ((dirent = readdir(dir)))
 		names = g_list_insert_sorted(names, g_strdup(dirent->d_name), srm_dir_compare);
@@ -566,19 +570,19 @@ static void handle_srm_catalog(struct srm_client *client, struct srm_catalog *re
 		start = 1;
 
 	GList *p = g_list_nth(names, start - 1);
-	GString *fullname = g_string_sized_new(128);
 	for (cnt = 0;  p && cnt < max; p = g_list_next(p)) {
-		g_string_printf(fullname, "%s/%s", dirname->str, (char *)p->data);
-		if (!get_file_info(fullname, &ret.fi[cnt]))
+		GString *fullname = g_string_new(dirname->str);
+		g_string_append_printf(fullname, "/%s", (char *)p->data);
+		if (!get_file_info(fullname->str, &ret.fi[cnt]))
 			cnt++;
+		g_string_free(fullname, TRUE);
 
 	}
-	g_string_free(fullname, TRUE);
 	g_list_free_full(names, free);
 	ret.num_files = htonl(cnt);
 error:
 	srm_debug(SRM_DEBUG_REQUEST, client, "%s: CAT '%s' start=%d max=%d sets=%d wd=%x results=%d error=%d\n",
-		  __func__, dirname ? dirname->str : "", start, max, sets, ntohl(req->fh.working_directory), cnt, error);
+		  __func__, dirname ? dirname->str : "", start, max, ntohl(req->fh.working_directory), cnt, error);
 	if (dirname)
 		g_string_free(dirname, TRUE);
 	srm_send_response(client, req, &ret, sizeof(ret), error);
@@ -587,24 +591,20 @@ error:
 static void handle_srm_createfile(struct srm_client *client, struct srm_create_file *req)
 {
 	struct srm_return_empty ret = { 0 };
-	int fd, sets, type;
+	int fd, type, error = 0;
 	GString *filename;
-	int error = 0;
 
-	sets = ntohl(req->fh.file_name_sets);
 	type = ntohl(req->file_code) & 0xffff;
-
-	filename = get_filename(client, 0, sets, req->filenames, &req->vh, &req->fh, &error);
+	filename = srm_get_filename(client, &req->vh, &req->fh, req->filenames, &error);
 	if (!filename)
 		goto error;
-
 	if (type == 3) {
 		if (mkdir(filename->str, 0755) == -1)
-			error = errno_to_srm_error(client, errno);
+			error = errno_to_srm_error(client);
 	} else {
 		fd = open(filename->str, O_WRONLY|O_TRUNC|O_CREAT, 0644);
 		if (fd == -1) {
-			error = errno_to_srm_error(client, errno);
+			error = errno_to_srm_error(client);
 			goto error;
 		}
 		struct lif_header buf = { 0 };
@@ -612,18 +612,19 @@ static void handle_srm_createfile(struct srm_client *client, struct srm_create_f
 		buf.type = req->file_code >> 16;
 		buf.gp = req->boot_start_address;
 		if (write(fd, &buf, sizeof(buf)) == -1 || close(fd) == -1)
-			error = errno_to_srm_error(client, errno);
+			error = errno_to_srm_error(client);
 	}
 error:
-	srm_debug(SRM_DEBUG_FILE, client, "%s: CREATE FILE: %s %08x\n",
-		  __func__, filename ? filename->str : NULL, type);
-	if (filename)
-		g_string_free(filename, TRUE);
+	srm_debug(SRM_DEBUG_FILE, client, "%s: CREATE FILE: %s %08x\n", __func__, filename, type);
+	g_string_free(filename, TRUE);
 	srm_send_response(client, req, &ret, sizeof(ret), error);
 }
 
 static void handle_srm_create_link(struct srm_client *client, struct srm_create_link *req)
 {
+	(void)client;
+	(void)req;
+#if 0
 	struct srm_return_empty ret = { 0 };
 	GString *old_filename = NULL, *new_filename = NULL;
 	int old_sets, new_sets, purge, err;
@@ -646,7 +647,7 @@ static void handle_srm_create_link(struct srm_client *client, struct srm_create_
 	else
 		err = link(old_filename->str, new_filename->str);
 
-	error = err ? errno_to_srm_error(client, errno) : 0;
+	error = err ? errno_to_srm_error(client) : 0;
 error:
 
 	srm_debug(SRM_DEBUG_REQUEST, client, "%s: CREATELINK %s -> %s, purge %d, error %d\n", __func__,
@@ -657,53 +658,23 @@ error:
 	if (new_filename)
 		g_string_free(new_filename, TRUE);
 	srm_send_response(client, req, &ret, sizeof(ret), error);
+#endif
 }
 
 static void handle_srm_volstatus(struct srm_client *client, struct srm_volume_status *req)
 {
-	char *driver = srm_to_c_string(req->vh.driver_name);
-	char *catalog = srm_to_c_string(req->vh.catalogue_organization);
-	char *volume = srm_to_c_string(req->vh.volume_name);
-	int index, error = SRM_ERRNO_VOLUME_NOT_FOUND;
 	struct srm_return_volume_status ret = { 0 };
-	uint32_t address;
+	struct srm_volume *volume;
+	int error = 0;
 
-	address = ntohl(req->vh.device_address.address1);
-
-	if (req->vh.device_address_present) {
-		if (get_volume(client, address, ret.volname, NULL) != -1) {
-			srm_debug(SRM_DEBUG_FILE, client, "volume %d exists\n", address);
-			error = 0;
-			ret.exist = 1;
-			ret.srmux = 1;
-		}
-	} else {
-		index = get_volume(client, -1, volume, NULL);
-		if (index != -1) {
-			srm_debug(SRM_DEBUG_FILE, client, "volume '%s' exists\n", volume);
-			memcpy(ret.volname, req->vh.volume_name, SRM_VOLNAME_LENGTH);
-			error = 0;
-			ret.exist = 1;
-			ret.srmux = 1;
-		}
-	}
-
-	if (!error) {
+	volume = srm_volume_from_vh(client, &req->vh, &error);
+	if (volume) {
+		c_string_to_srm(ret.volname, volume->name);
 		ret.exist = 1;
 		ret.srmux = 1;
 	}
-
-	srm_debug(SRM_DEBUG_REQUEST, client, "%s: VOLSTATUS vname='%s' driver='%s' catalog='%s' addr=%d haddr=%d unit=%d"
-		  " volnum=%d present=%d error=%d\n",
-		  __func__, volume, driver, catalog, address,
-		  ntohl(req->vh.device_address.haddress),
-		  ntohl(req->vh.device_address.unit_num),
-		  ntohl(req->vh.device_address.volume_num),
-		  ntohl(req->vh.device_address_present),
-		  error);
-	free(driver);
-	free(catalog);
-	free(volume);
+	srm_debug(SRM_DEBUG_REQUEST, client, "%s: VOLSTATUS vname='%s' error=%d\n",
+		  __func__, volume ? volume->name : "", error);
 	srm_send_response(client, req, &ret, sizeof(ret), error);
 }
 
@@ -711,21 +682,18 @@ static void handle_srm_purgelink(struct srm_client *client, struct srm_purge_lin
 {
 	struct srm_return_empty ret = { 0 };
 	GString *filename;
-	int sets, error;
+	int error = 0;
 
-	sets = ntohl(req->fh.file_name_sets);
-
-	filename = get_filename(client, 0, sets, req->filenames, &req->vh, &req->fh, &error);
+	filename = srm_get_filename(client, &req->vh, &req->fh, req->filenames, &error);
 	if (!filename)
 		goto error;
 
 	if (unlink(filename->str) == -1)
-		error = errno_to_srm_error(client, errno);
+		error = errno_to_srm_error(client);
 error:
 	srm_debug(SRM_DEBUG_REQUEST, client, "%s: PURGE LINK %s error=%d\n",
-		  __func__, filename ? filename->str : "", error);
-	if (filename)
-		g_string_free(filename, TRUE);
+		  __func__,filename->str, error);
+	g_string_free(filename, TRUE);
 	srm_send_response(client, req, &ret, sizeof(ret), error);
 }
 
@@ -760,13 +728,13 @@ static void handle_srm_xchg_open(struct srm_client *client, struct srm_xchg_open
 
 	g_string_printf(tmpname, "%s.TMP", entry2->filename->str);
 	if (rename(entry1->filename->str, tmpname->str) == -1) {
-		error = errno_to_srm_error(client, errno);
+		error = errno_to_srm_error(client);
 		goto error;
 	}
 
 	if (rename(entry2->filename->str, entry1->filename->str) == -1) {
 		rename(tmpname->str, entry1->filename->str);
-		error = errno_to_srm_error(client, errno);
+		error = errno_to_srm_error(client);
 		goto error;
 	}
 
@@ -774,7 +742,7 @@ static void handle_srm_xchg_open(struct srm_client *client, struct srm_xchg_open
 	if (rename(tmpname->str, entry2->filename->str) == -1) {
 		rename(entry1->filename->str, entry2->filename->str);
 		rename(tmpname->str, entry1->filename->str);
-		error = errno_to_srm_error(client, errno);
+		error = errno_to_srm_error(client);
 		goto error;
 	}
 error:

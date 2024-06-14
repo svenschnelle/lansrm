@@ -35,6 +35,14 @@ struct config {
 };
 extern struct config config;
 
+struct srm_volume {
+	char *name;
+	char *path;
+	int index;
+	DIR *dir;
+	int dirfd;
+};
+
 typedef enum srm_errno {
 	SRM_ERRNO_SOFTWARE_BUG = 31000,
 	SRM_ERRNO_BAD_SELECT_CODE = 31001,
@@ -378,6 +386,7 @@ struct open_file_entry {
 	off_t hdr_offset;
 	int client_fd;
 	int fd;
+	int cwd;
 };
 
 typedef enum {
@@ -423,9 +432,11 @@ struct srm_request_xfer {
 struct srm_client {
 	struct srm_request_xfer xfer;
 	struct sockaddr_in addr;
+	GList *volumes;
+	GTree *files;
 	int debug_level;
 	char *hostname;
-	GTree *files;
+
 	int fd;
 };
 
