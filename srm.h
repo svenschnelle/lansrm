@@ -419,11 +419,10 @@ struct srm_request_xfer {
 } __packed;
 
 struct srm_client {
-	int debug_level;
 	struct srm_request_xfer xfer;
 	struct sockaddr_in addr;
-	struct ether_addr hwaddr;
-	char hwaddr_string[24];
+	int debug_level;
+	char *hostname;
 	GTree *files;
 	int fd;
 };

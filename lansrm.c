@@ -40,12 +40,9 @@ void srm_debug(int level, struct srm_client *client, char *fmt, ...)
 		return;
 
 	msg = g_string_sized_new(128);
-	if (client && inet_ntop(AF_INET, &client->addr.sin_addr.s_addr, ipstr, addrlen)) {
-		uint8_t *p = client->hwaddr.ether_addr_octet;
+	if (client && inet_ntop(AF_INET, &client->addr.sin_addr.s_addr, ipstr, addrlen))
+		g_string_printf(msg, "[%15s] ", ipstr);
 
-		g_string_printf(msg, "[%02x:%02x:%02x:%02x:%02x:%02x %15s] ",
-				p[0], p[1], p[2], p[3], p[4], p[5], ipstr);
-	}
 	va_start(ap, fmt);
 	g_string_append_vprintf(msg, fmt, ap);
 	va_end(ap);
@@ -97,27 +94,33 @@ static int lansrm_file_compare(const void *a, const void *b)
 	return *filea - *fileb;
 }
 
-static int srm_connect_fill_ip_node(struct srm_reply *reply, struct srm_client *client)
+static int srm_connect_fill_ip_node(struct srm_reply *reply, struct srm_client *client,
+				    char *hwaddr_string)
 {
 	struct in_addr clientaddr, hostaddr;
 	gchar *tmp;
 	int ret;
 
-	tmp = g_key_file_get_string(config.keyfile, client->hwaddr_string, "ip", NULL);
-	if (!tmp) {
-		srm_debug(SRM_DEBUG_CONNECT, client, "unknown client %s\n", client->hwaddr_string);
-		return -1;
-	}
-	ret = inet_pton(AF_INET, tmp, &clientaddr);
-	g_free(tmp);
-	if (ret != 1) {
-		srm_debug(SRM_DEBUG_FILE, client, "Failed to parse IP %s\n", tmp);
-		return -1;
+	if (hwaddr_string) {
+		tmp = g_key_file_get_string(config.keyfile, "global", hwaddr_string, NULL);
+		if (!tmp) {
+			srm_debug(SRM_DEBUG_CONNECT, client, "unknown client %s\n", hwaddr_string);
+			return -1;
+		}
+		ret = inet_pton(AF_INET, tmp, &clientaddr);
+		if (ret != 1) {
+			srm_debug(SRM_DEBUG_FILE, client, "Failed to parse IP %s\n", tmp);
+			g_free(tmp);
+			return -1;
+		}
+		client->addr.sin_addr.s_addr = clientaddr.s_addr;
+		client->hostname = g_strdup(tmp);
+		g_free(tmp);
 	}
 
 	tmp = g_key_file_get_string(config.keyfile, "global", "hostip", NULL);
 	if (!tmp) {
-		srm_debug(SRM_DEBUG_CONNECT, client, "no hostip set in global section\n", client->hwaddr_string);
+		srm_debug(SRM_DEBUG_CONNECT, client, "no hostip set in global section\n", hwaddr_string);
 		return -1;
 	}
 	ret = inet_pton(AF_INET, tmp, &hostaddr);
@@ -128,26 +131,21 @@ static int srm_connect_fill_ip_node(struct srm_reply *reply, struct srm_client *
 		return -1;
 	}
 
-	client->addr.sin_addr.s_addr = clientaddr.s_addr;
 	if (reply) {
 		reply->my_ip = clientaddr.s_addr;
 		reply->host_ip = hostaddr.s_addr;
-		reply->my_node = htons(g_key_file_get_integer(config.keyfile, client->hwaddr_string, "node", NULL));
+		reply->my_node = htons(g_key_file_get_integer(config.keyfile, client->hostname, "node", NULL));
 	}
 	return 0;
 }
 
 static struct srm_client *srm_new_client(GTree *clients, int fd, struct sockaddr_in *addr,
-					 socklen_t addrlen, uint8_t *hwaddr,
+					 socklen_t addrlen, char *hwaddr_string,
 					 struct srm_reply *reply)
 {
 	struct srm_client *client = g_new0(struct srm_client, 1);
-
-	sprintf(client->hwaddr_string, "%02x:%02x:%02x:%02x:%02x:%02x",
-		hwaddr[0], hwaddr[1], hwaddr[2], hwaddr[3], hwaddr[4], hwaddr[5]);
 	memcpy(&client->addr, addr, addrlen);
-	memcpy(&client->hwaddr, hwaddr, ETH_ALEN);
-	if (srm_connect_fill_ip_node(reply, client) == -1) {
+	if (srm_connect_fill_ip_node(reply, client, hwaddr_string) == -1) {
 		g_free(client);
 		return NULL;
 	}
@@ -168,15 +166,20 @@ static void handle_srm_connect(struct srm_request_connect *req, GTree *clients, 
 			       char *ipstr)
 {
 	struct srm_reply reply = { 0 };
+	uint8_t *hwaddr = req->station;
+	char hwaddr_string[32] = { 0 };
 	struct srm_client *client;
 	struct sockaddr_in bcaddr;
 
-	client = srm_new_client(clients, fd, addr, addrlen, req->station, &reply);
+	snprintf(hwaddr_string, sizeof(hwaddr_string)-1, "%02x:%02x:%02x:%02x:%02x:%02x",
+		 hwaddr[0], hwaddr[1], hwaddr[2], hwaddr[3], hwaddr[4], hwaddr[5]);
 
-	srm_debug(SRM_DEBUG_CONNECT, client, "%s: code=%d, option=%d, node=%d, version=%d, station=%s ip=%s\n",
+	client = srm_new_client(clients, fd, addr, addrlen, hwaddr_string, &reply);
+
+	srm_debug(SRM_DEBUG_CONNECT, client, "%s: code=%d, option=%d, node=%d, version=%d, station=%s host=%s\n",
 		  __func__, ntohs(req->ret_code), ntohs(req->option_code),
 		  ntohs(req->host_node), ntohs(req->version),
-		  client->hwaddr_string, ipstr);
+		  hwaddr_string, ipstr);
 
 	memcpy(reply.my_station, req->station, sizeof(reply.my_station));
 	reply.rec_type = htons(SRM_REPLY_CONNECT);
@@ -206,11 +209,6 @@ static void handle_rx(int fd, GTree *clients, struct sockaddr_in *addr,
 	char ipstr[INET_ADDRSTRLEN];
 	struct srm_client *client;
 
-	if (len < sizeof(struct srm_request_connect)) {
-		srm_debug(SRM_DEBUG_RX, NULL, "short srm request: %zd bytes\n", len);
-		return;
-	}
-
 	if (!inet_ntop(AF_INET, &addr->sin_addr.s_addr, ipstr, addrlen)) {
 		srm_debug(SRM_DEBUG_RX, NULL, "%s: inet_ntop: %m\n", __func__);
 		return;
@@ -218,19 +216,30 @@ static void handle_rx(int fd, GTree *clients, struct sockaddr_in *addr,
 
 	switch (ntohs(*(uint16_t *)buf)) {
 	case SRM_REQUEST_CONNECT:
+		if (len < sizeof(struct srm_request_connect)) {
+			srm_debug(SRM_DEBUG_RX, NULL, "short srm request: %zd bytes\n", len);
+			break;
+		}
 		handle_srm_connect(buf, clients, fd, addr, addrlen, ipstr);
 		break;
 
 	case SRM_REQUEST_XFER:
+		if (len < sizeof(struct srm_request_xfer)) {
+			srm_debug(SRM_DEBUG_RX, NULL, "short srm request: %zd bytes\n", len);
+			break;
+		}
 		client = g_tree_lookup(clients, addr);
 		// TODO: avoid copy
 		if (!client) {
 			srm_debug(SRM_DEBUG_SOCKET, client, "client without connect: %s\n", ipstr);
-			break;
+			client = srm_new_client(clients, fd, addr, addrlen, NULL, NULL);
+			client->hostname = g_strdup(ipstr);
+			memcpy(&client->addr, addr, sizeof(struct sockaddr_in));
 		}
 		memcpy(&client->xfer, buf, sizeof(struct srm_request_xfer));
 		handle_srm_xfer(client, (struct srm_request_xfer *)buf, len);
 		break;
+
 	default:
 		hexdump(buf, len);
 		break;
@@ -263,7 +272,8 @@ static int loop(GTree *clients, int fd)
 			ssize_t len = recvfrom(fd, buf, sizeof(buf), 0, (struct sockaddr *)&addr, &addrlen);
 			if (len == -1 && errno != EAGAIN)
 				return 1;
-			handle_rx(fd, clients, &addr, addrlen, buf, len);
+			if (len > 2)
+				handle_rx(fd, clients, &addr, addrlen, buf, len);
 		}
 
 		if (FD_ISSET(fd, &efds)) {

@@ -28,7 +28,7 @@ static void c_string_to_srm(char *d, char *s)
 
 static int get_volume(struct srm_client *client, int index, char *name, char **path)
 {
-	gchar *keys[] = { client->hwaddr_string, "global" };
+	gchar *keys[] = { client->hostname, "global" };
 	gchar **volumes, *volname;
 	unsigned int i, j;
 	int idx, ret = -1;
