@@ -51,12 +51,12 @@ static struct srm_volume *get_volume_by_index(struct srm_client *client, int ind
 }
 
 static void srm_send_response(struct srm_client *client, void *request, void *response,
-			      int len, int srm_errno)
+			      int len, int level, int srm_errno)
 {
 	struct srm_return_header *hdr = (struct srm_return_header *)response;
 	struct srm_send_header *p = (struct srm_send_header *)request;
 
-	hdr->level = 7;
+	hdr->level = level;
 	hdr->message_length = htonl(len - 4);
 	hdr->return_request_type = htonl(-htonl(p->request_type));
 	hdr->user_sequencing_field = p->user_sequencing_field;
@@ -69,12 +69,16 @@ static void srm_send_response(struct srm_client *client, void *request, void *re
 	lansrm_send(client, response, len);
 }
 
+static void handle_srm_reset(struct srm_client *client, void *buf)
+{
+	struct srm_return_empty ret = { 0 };
+	srm_send_response(client, buf, &ret, sizeof(ret), 2, 0x01000000);
+}
+
 static void handle_srm_areyoualive(struct srm_client *client, void *buf)
 {
-	(void)client;
-	(void)buf;
-
-	/* Not used with LAN SRM? */
+	struct srm_return_empty ret = { 0 };
+	srm_send_response(client, buf, &ret, sizeof(ret), 2, 0x01000000);
 }
 
 static int errno_to_srm_error(struct srm_client *client)
@@ -134,7 +138,7 @@ static void handle_srm_write(struct srm_client *client, struct srm_write *req)
 error:
 	srm_debug(SRM_DEBUG_REQUEST, client, "%s: WRITE offset=%x, requested=%d, written=%zd acc=%d\n",
 		  __func__, offset, requested, len, acc);
-	srm_send_response(client, req, &ret, sizeof(ret), error);
+	srm_send_response(client, req, &ret, sizeof(ret), 7, error);
 }
 
 static void handle_srm_position(struct srm_client *client, struct srm_position *req)
@@ -163,7 +167,7 @@ static void handle_srm_position(struct srm_client *client, struct srm_position *
 error:
 	srm_debug(SRM_DEBUG_REQUEST, client, "%s: POSITION id=%x offset=%x, whence=%d, error=%zd\n",
 		  __func__, entry ? entry->client_fd : 0, offset, whence, error);
-	srm_send_response(client, req, &ret, sizeof(ret), error);
+	srm_send_response(client, req, &ret, sizeof(ret), 7, error);
 }
 
 static void handle_srm_read(struct srm_client *client, struct srm_read *req)
@@ -210,7 +214,7 @@ error:
 		  "actual=%zd offset=%x accesscode=%d, hdr_offset=%zx error=%zd\n",
 		  __func__, entry ? entry->client_fd : 0,
 		  requested, len, offset, acc, entry->hdr_offset, error);
-	srm_send_response(client, req, &ret, retlen, error);
+	srm_send_response(client, req, &ret, retlen, 7, error);
 }
 
 static void handle_srm_set_eof(struct srm_client *client, struct srm_file_info *req)
@@ -219,7 +223,7 @@ static void handle_srm_set_eof(struct srm_client *client, struct srm_file_info *
 
 	// TODO
 	srm_debug(SRM_DEBUG_FILE, client, "%s: SET EOF\n", __func__);
-	srm_send_response(client, req, &ret, sizeof(ret), 0);
+	srm_send_response(client, req, &ret, sizeof(ret), 7, 0);
 }
 
 static int get_lif_info(int fd, uint16_t *out, uint32_t *bootaddr, off_t *hdr_offset)
@@ -341,7 +345,7 @@ static void handle_srm_fileinfo(struct srm_client *client, struct srm_fileinfo *
 error:
 	srm_debug(SRM_DEBUG_REQUEST, client, "%s: FILEINFO id=%08x error=%d file=%s\n",
 		  __func__, id, error, entry ? entry->filename->str : "");
-	srm_send_response(client, req, &ret, sizeof(ret), error);
+	srm_send_response(client, req, &ret, sizeof(ret), 7 ,error);
 }
 
 static void handle_srm_close(struct srm_client *client, struct srm_close *req)
@@ -362,7 +366,7 @@ static void handle_srm_close(struct srm_client *client, struct srm_close *req)
 	g_tree_remove(client->files, &id);
 error:
 	srm_debug(SRM_DEBUG_REQUEST, client, "%s: CLOSE %08x error=%d\n", __func__, id, error);
-	srm_send_response(client, req, &ret, sizeof(ret), error);
+	srm_send_response(client, req, &ret, sizeof(ret), 7, error);
 }
 
 static GString *srm_filename_from_fh(struct srm_file_header *fh,
@@ -532,7 +536,7 @@ error:
 		  __func__, filename ? filename->str : "", fd, ntohl(ret.file_id), error);
 	if (filename && error)
 		g_string_free(filename, TRUE);
-	srm_send_response(client, req, &ret, sizeof(ret), error);
+	srm_send_response(client, req, &ret, sizeof(ret), 7, error);
 }
 
 static int srm_dir_compare(const void *a, const void *b)
@@ -587,7 +591,7 @@ error:
 		  __func__, dirname ? dirname->str : "", start, max, ntohl(req->fh.working_directory), cnt, error);
 	if (dirname)
 		g_string_free(dirname, TRUE);
-	srm_send_response(client, req, &ret, sizeof(ret), error);
+	srm_send_response(client, req, &ret, sizeof(ret), 7, error);
 }
 
 static void handle_srm_createfile(struct srm_client *client, struct srm_create_file *req)
@@ -619,7 +623,7 @@ static void handle_srm_createfile(struct srm_client *client, struct srm_create_f
 error:
 	srm_debug(SRM_DEBUG_FILE, client, "%s: CREATE FILE: %s %08x\n", __func__, filename, type);
 	g_string_free(filename, TRUE);
-	srm_send_response(client, req, &ret, sizeof(ret), error);
+	srm_send_response(client, req, &ret, sizeof(ret), 7, error);
 }
 
 static void handle_srm_create_link(struct srm_client *client, struct srm_create_link *req)
@@ -655,7 +659,7 @@ error:
 		g_string_free(old_filename, TRUE);
 	if (new_filename)
 		g_string_free(new_filename, TRUE);
-	srm_send_response(client, req, &ret, sizeof(ret), error);
+	srm_send_response(client, req, &ret, sizeof(ret), 7, error);
 }
 
 static void handle_srm_volstatus(struct srm_client *client, struct srm_volume_status *req)
@@ -672,7 +676,7 @@ static void handle_srm_volstatus(struct srm_client *client, struct srm_volume_st
 	}
 	srm_debug(SRM_DEBUG_REQUEST, client, "%s: VOLSTATUS vname='%s' error=%d\n",
 		  __func__, volume ? volume->name : "", error);
-	srm_send_response(client, req, &ret, sizeof(ret), error);
+	srm_send_response(client, req, &ret, sizeof(ret), 7, error);
 }
 
 static void handle_srm_purgelink(struct srm_client *client, struct srm_purge_link *req)
@@ -691,7 +695,7 @@ error:
 	srm_debug(SRM_DEBUG_REQUEST, client, "%s: PURGE LINK %s error=%d\n",
 		  __func__,filename->str, error);
 	g_string_free(filename, TRUE);
-	srm_send_response(client, req, &ret, sizeof(ret), error);
+	srm_send_response(client, req, &ret, sizeof(ret), 7, error);
 }
 
 static void handle_srm_change_protect(struct srm_client *client, struct srm_fileinfo *req)
@@ -699,7 +703,7 @@ static void handle_srm_change_protect(struct srm_client *client, struct srm_file
 	struct srm_return_empty ret = { 0 };
 
 	srm_debug(SRM_DEBUG_REQUEST, client, "%s: CHANGE PROTECT\n", __func__);
-	srm_send_response(client, req, &ret, sizeof(ret), 0);
+	srm_send_response(client, req, &ret, sizeof(ret), 7, 0);
 }
 
 static void handle_srm_xchg_open(struct srm_client *client, struct srm_xchg_open *req)
@@ -747,7 +751,7 @@ error:
 		  id1, entry1 ? entry1->filename->str : "", id2, entry2 ? entry2->filename->str : "", error);
 	if (tmpname)
 		g_string_free(tmpname, TRUE);
-	srm_send_response(client, req, &ret, sizeof(ret), error);
+	srm_send_response(client, req, &ret, sizeof(ret), 7, error);
 }
 
 void srm_handle_request(struct srm_client *client, void *buf, size_t len)
@@ -771,6 +775,7 @@ void srm_handle_request(struct srm_client *client, void *buf, size_t len)
 
 	switch(ntohl(hdr->request_type)) {
 	case SRM_REQ_RESET:
+		handle_srm_reset(client, buf);
 		break;
 
 	case SRM_REQ_AREYOUALIVE:
