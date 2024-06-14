@@ -226,10 +226,21 @@ static void handle_rx(int fd, GTree *clients, struct sockaddr_in *addr,
 		client = g_tree_lookup(clients, addr);
 		// TODO: avoid copy
 		if (!client) {
-			srm_debug(SRM_DEBUG_ERROR, client, "client without connect: %s\n", ipstr);
-			client = srm_new_client(clients, fd, addr, addrlen, NULL, NULL);
-			client->hostname = g_strdup(ipstr);
-			memcpy(&client->addr, addr, sizeof(struct sockaddr_in));
+			if (!g_key_file_get_boolean(config.keyfile, "global", "accept_unknown", NULL)) {
+				srm_debug(SRM_DEBUG_ERROR, client, "client without connect: %s\n", ipstr);
+				struct srm_request_xfer *req = buf;
+				req->ret_code = htons(4);
+				req->rec_type = htons(SRM_REPLY_XFER);
+				if (sendto(fd, req, sizeof(struct srm_request_xfer), 0,
+					   (struct sockaddr *)addr, addrlen) == -1) {
+					srm_debug(SRM_DEBUG_ERROR, client, "sendto: %m\n");
+				}
+			} else {
+				client = srm_new_client(clients, fd, addr, addrlen, NULL, NULL);
+				client->hostname = g_strdup(ipstr);
+				memcpy(&client->addr, addr, sizeof(struct sockaddr_in));
+			}
+			break;
 		}
 		memcpy(&client->xfer, buf, sizeof(struct srm_request_xfer));
 		handle_srm_xfer(client, (struct srm_request_xfer *)buf, len);
