@@ -49,15 +49,15 @@ accept_unknown=1
 volume=0
 
 # path on filesystem below chroot path above
-path=SYSTEMS
+path=/SYSTEMS
 
 [BOOT]
 volume=8
-path=BOOT
+path=/BOOT
 
 [HP340]
 volume=1
-path=HP340
+path=/HP340
 
 # SRM client configuration
 [172.16.1.2]
