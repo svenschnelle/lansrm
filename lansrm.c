@@ -297,7 +297,7 @@ int main(int argc, char **argv)
 	GError *gerr;
 
 	config.keyfile = g_key_file_new();
-	if (g_key_file_load_from_file(config.keyfile, "srm.ini", G_KEY_FILE_NONE, &gerr)) {
+	if (g_key_file_load_from_file(config.keyfile, "/etc/srm.ini", G_KEY_FILE_NONE, &gerr)) {
 		config.debug = g_key_file_get_integer(config.keyfile, "global", "debug", NULL);
 		config.interface = g_key_file_get_string(config.keyfile, "global", "interface", NULL);
 		config.chroot = g_key_file_get_string(config.keyfile, "global", "chroot", NULL);
