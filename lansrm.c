@@ -246,6 +246,10 @@ static void handle_rx(int fd, GTree *clients, struct sockaddr_in *addr,
 		handle_srm_xfer(client, (struct srm_request_xfer *)buf, len);
 		break;
 
+	case SRM_REPLY_XFER:
+	case SRM_REPLY_CONNECT:
+		break;
+
 	default:
 		hexdump(buf, len);
 		break;
