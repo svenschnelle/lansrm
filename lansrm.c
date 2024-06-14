@@ -97,16 +97,114 @@ static int lansrm_file_compare(const void *a, const void *b)
 	return *filea - *fileb;
 }
 
-static void handle_rx(int fd, GTree *clients, struct sockaddr_in *addr,
-		      socklen_t addrlen, uint8_t *buf, size_t len)
+static int srm_connect_fill_ip_node(struct srm_reply *reply, struct srm_client *client)
 {
-	struct srm_request_connect *req;
-	struct srm_reply reply = { 0 };
-	char ipstr[INET_ADDRSTRLEN];
-	struct sockaddr_in bcaddr;
-	struct srm_client *client;
-	struct in_addr tmpaddr;
+	struct in_addr clientaddr, hostaddr;
 	gchar *tmp;
+	int ret;
+
+	tmp = g_key_file_get_string(config.keyfile, client->hwaddr_string, "ip", NULL);
+	if (!tmp) {
+		srm_debug(SRM_DEBUG_CONNECT, client, "unknown client %s\n", client->hwaddr_string);
+		return -1;
+	}
+	ret = inet_pton(AF_INET, tmp, &clientaddr);
+	g_free(tmp);
+	if (ret != 1) {
+		srm_debug(SRM_DEBUG_FILE, client, "Failed to parse IP %s\n", tmp);
+		return -1;
+	}
+
+	tmp = g_key_file_get_string(config.keyfile, "global", "hostip", NULL);
+	if (!tmp) {
+		srm_debug(SRM_DEBUG_CONNECT, client, "no hostip set in global section\n", client->hwaddr_string);
+		return -1;
+	}
+	ret = inet_pton(AF_INET, tmp, &hostaddr);
+	g_free(tmp);
+	if (ret != 1) {
+		srm_debug(SRM_DEBUG_FILE, client, "Failed to parse IP %s\n", tmp);
+		g_free(tmp);
+		return -1;
+	}
+
+	client->addr.sin_addr.s_addr = clientaddr.s_addr;
+	if (reply) {
+		reply->my_ip = clientaddr.s_addr;
+		reply->host_ip = hostaddr.s_addr;
+		reply->my_node = htons(g_key_file_get_integer(config.keyfile, client->hwaddr_string, "node", NULL));
+	}
+	return 0;
+}
+
+static struct srm_client *srm_new_client(GTree *clients, int fd, struct sockaddr_in *addr,
+					 socklen_t addrlen, uint8_t *hwaddr,
+					 struct srm_reply *reply)
+{
+	struct srm_client *client = g_new0(struct srm_client, 1);
+
+	sprintf(client->hwaddr_string, "%02x:%02x:%02x:%02x:%02x:%02x",
+		hwaddr[0], hwaddr[1], hwaddr[2], hwaddr[3], hwaddr[4], hwaddr[5]);
+	memcpy(&client->addr, addr, addrlen);
+	memcpy(&client->hwaddr, hwaddr, ETH_ALEN);
+	if (srm_connect_fill_ip_node(reply, client) == -1) {
+		g_free(client);
+		return NULL;
+	}
+	client->files = g_tree_new(lansrm_file_compare);
+	client->fd = fd;
+	g_tree_insert(clients, &client->addr, client);
+	return client;
+}
+
+static void srm_client_free(struct srm_client *client)
+{
+	g_tree_destroy(client->files);
+	g_free(client);
+}
+
+static void handle_srm_connect(struct srm_request_connect *req, GTree *clients, int fd,
+			       struct sockaddr_in *addr, socklen_t addrlen,
+			       char *ipstr)
+{
+	struct srm_reply reply = { 0 };
+	struct srm_client *client;
+	struct sockaddr_in bcaddr;
+
+	client = srm_new_client(clients, fd, addr, addrlen, req->station, &reply);
+
+	srm_debug(SRM_DEBUG_CONNECT, client, "%s: code=%d, option=%d, node=%d, version=%d, station=%s ip=%s\n",
+		  __func__, ntohs(req->ret_code), ntohs(req->option_code),
+		  ntohs(req->host_node), ntohs(req->version),
+		  client->hwaddr_string, ipstr);
+
+	memcpy(reply.my_station, req->station, sizeof(reply.my_station));
+	reply.rec_type = htons(SRM_REPLY_CONNECT);
+	reply.ret_code = 0;
+	reply.host_flag = 0;
+	reply.version = htons(11);
+
+	bcaddr.sin_addr.s_addr = htonl(INADDR_BROADCAST);
+	bcaddr.sin_port = htons(570);
+	bcaddr.sin_family = AF_INET;
+
+	if (sendto(fd, &reply, sizeof(reply), 0,
+		   (struct sockaddr *)&bcaddr, sizeof(bcaddr)) == -1) {
+		srm_debug(SRM_DEBUG_SOCKET, client, "sendto: %m\n");
+		g_tree_remove(clients, &client->addr);
+		goto error;
+	}
+	return;
+error:
+	srm_client_free(client);
+	return;
+}
+
+static void handle_rx(int fd, GTree *clients, struct sockaddr_in *addr,
+		      socklen_t addrlen, void *buf, size_t len)
+{
+	char ipstr[INET_ADDRSTRLEN];
+	struct srm_client *client;
 
 	if (len < sizeof(struct srm_request_connect)) {
 		srm_debug(SRM_DEBUG_RX, NULL, "short srm request: %zd bytes\n", len);
@@ -120,57 +218,7 @@ static void handle_rx(int fd, GTree *clients, struct sockaddr_in *addr,
 
 	switch (ntohs(*(uint16_t *)buf)) {
 	case SRM_REQUEST_CONNECT:
-		req = (struct srm_request_connect *)buf;
-		client = g_new0(struct srm_client, 1);
-		client->files = g_tree_new(lansrm_file_compare);
-		client->fd = fd;
-
-		memcpy(&client->addr, addr, addrlen);
-		memcpy(&client->hwaddr, req->station, ETH_ALEN);
-		sprintf(client->hwaddr_string, "%02x:%02x:%02x:%02x:%02x:%02x",
-			req->station[0], req->station[1], req->station[2],
-			req->station[3], req->station[4], req->station[5]);
-
-		srm_debug(SRM_DEBUG_CONNECT, client, "%s: code=%d, option=%d, node=%d, version=%d, station=%s ip=%s\n",
-			__func__, ntohs(req->ret_code), ntohs(req->option_code),
-			  ntohs(req->host_node), ntohs(req->version),
-			  client->hwaddr_string, ipstr);
-
-		memcpy(reply.my_station, req->station, sizeof(reply.my_station));
-		reply.rec_type = htons(SRM_REPLY_CONNECT);
-		reply.ret_code = 0;
-		tmp = g_key_file_get_string(config.keyfile, client->hwaddr_string, "ip", NULL);
-		if (tmp) {
-			if (inet_pton(AF_INET, tmp, &tmpaddr)) {
-				reply.my_ip = tmpaddr.s_addr;
-				client->addr.sin_addr.s_addr = tmpaddr.s_addr;
-			}
-			else
-				srm_debug(SRM_DEBUG_FILE, client, "Failed to parse IP %s\n", tmp);
-		}
-		g_free(tmp);
-
-		tmp = g_key_file_get_string(config.keyfile, "global", "hostip", NULL);
-		if (tmp) {
-			if (inet_pton(AF_INET, tmp, &tmpaddr))
-				reply.host_ip = tmpaddr.s_addr;
-			else
-				srm_debug(SRM_DEBUG_FILE, client, "Failed to parse IP %s\n", tmp);
-		}
-		g_free(tmp);
-
-		reply.host_flag = 0;
-		reply.my_node = htons(g_key_file_get_integer(config.keyfile, client->hwaddr_string, "node", NULL));
-		reply.version = htons(11);
-		g_tree_insert(clients, &client->addr, client);
-
-		bcaddr.sin_addr.s_addr = htonl(INADDR_BROADCAST);
-		bcaddr.sin_port = htons(570);
-		bcaddr.sin_family = AF_INET;
-
-		if (sendto(fd, &reply, sizeof(reply), 0,
-		   (struct sockaddr *)&bcaddr, sizeof(bcaddr)) == -1)
-			srm_debug(SRM_DEBUG_SOCKET, client, "sendto: %m\n");
+		handle_srm_connect(buf, clients, fd, addr, addrlen, ipstr);
 		break;
 
 	case SRM_REQUEST_XFER:
