@@ -622,23 +622,17 @@ error:
 
 static void handle_srm_create_link(struct srm_client *client, struct srm_create_link *req)
 {
-	(void)client;
-	(void)req;
-#if 0
-	struct srm_return_empty ret = { 0 };
 	GString *old_filename = NULL, *new_filename = NULL;
-	int old_sets, new_sets, purge, err;
-	int error;
+	struct srm_return_empty ret = { 0 };
+	int error, purge, err;
 
-	old_sets = ntohl(req->fh_old.file_name_sets);
-	new_sets = ntohl(req->fh_new.file_name_sets);
 	purge = ntohl(req->purge_old_link);
 
-	old_filename = get_filename(client, 0, old_sets, req->filenames, &req->vh, &req->fh_old, &error);
+	old_filename = srm_get_filename(client,&req->vh, &req->fh_old, req->filenames, &error);
 	if (!old_filename)
 		goto error;
 
-	new_filename = get_filename(client, old_sets, new_sets, req->filenames, &req->vh, &req->fh_new, &error);
+	new_filename = srm_get_filename(client, &req->vh, &req->fh_new, req->filenames, &error);
 	if (!new_filename)
 		goto error;
 
@@ -658,7 +652,6 @@ error:
 	if (new_filename)
 		g_string_free(new_filename, TRUE);
 	srm_send_response(client, req, &ret, sizeof(ret), error);
-#endif
 }
 
 static void handle_srm_volstatus(struct srm_client *client, struct srm_volume_status *req)
