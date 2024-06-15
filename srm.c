@@ -365,18 +365,19 @@ error:
 	srm_send_response(client, req, &ret, sizeof(ret), error);
 }
 
-static GString *srm_filename_from_fh(struct srm_file_header *fh, struct srm_file_name_set *names)
+static GString *srm_filename_from_fh(struct srm_file_header *fh,
+				     struct srm_file_name_set *names,
+				     int start)
 {
 	GString *ret = g_string_sized_new(128);
 
-	for(unsigned int i = 0; i < ntohl(fh->file_name_sets); i++) {
+	for(unsigned int i = start; i < start + ntohl(fh->file_name_sets); i++) {
 		g_string_append_c(ret, '/');
 		char *s = names[i].file_name;
 		int j = 0;
 		while(*s != ' ' && *s != '<' && *s != '>' && j++ < 16)
 			g_string_append_c(ret, *s++);
 	}
-	while(g_string_replace(ret, "//", "/", 0));
 	return ret;
 }
 
@@ -422,7 +423,7 @@ static GString *srm_get_filename(struct srm_client *client,
 				 struct srm_volume_header *vh,
 				 struct srm_file_header *fh,
 				 struct srm_file_name_set *names,
-				 int *error)
+				 int start, int *error)
 {
 	struct srm_volume *volume;
 	struct open_file_entry *entry;
@@ -444,10 +445,11 @@ static GString *srm_get_filename(struct srm_client *client,
 		g_string_append_printf(ret, "/%s", entry->filename->str);
 	}
 
-	filename = srm_filename_from_fh(fh, names);
+	filename = srm_filename_from_fh(fh, names, start);
 	if (filename->len)
 		g_string_append_printf(ret, "/%s", filename->str);
 	g_string_free(filename, TRUE);
+	while(g_string_replace(ret, "//", "/", 0));
 	return ret;
 }
 
@@ -482,7 +484,7 @@ static void handle_srm_open(struct srm_client *client, struct srm_file_open *req
 	off_t hdr_offset = 0;
 	GString *filename;
 
-	filename = srm_get_filename(client, &req->vh, &req->fh, req->filenames, &errno);
+	filename = srm_get_filename(client, &req->vh, &req->fh, req->filenames, 0, &errno);
 	if (!filename)
 		goto error;
 
@@ -522,7 +524,7 @@ static void handle_srm_open(struct srm_client *client, struct srm_file_open *req
 	ret.boot_start_address = htonl(bootaddr);
 	ret.max_file_size = htonl(INT_MAX);
 	ret.max_record_size = htonl(256);
-	//	ret.share_bits = -1;
+	ret.share_bits = htonl(0xfffffff);
 insert:
 	ret.file_id = htonl(client_insert_file_entry(client, filename, fd, hdr_offset));
 error:
@@ -551,7 +553,7 @@ static void handle_srm_catalog(struct srm_client *client, struct srm_catalog *re
 	max = ntohl(req->max_num_files);
 	start = ntohl(req->file_index);
 
-	dirname = srm_get_filename(client, &req->vh, &req->fh, req->filenames, &error);
+	dirname = srm_get_filename(client, &req->vh, &req->fh, req->filenames, 0, &error);
 	if (!dirname)
 		goto error;
 
@@ -595,7 +597,7 @@ static void handle_srm_createfile(struct srm_client *client, struct srm_create_f
 	GString *filename;
 
 	type = ntohl(req->file_code) & 0xffff;
-	filename = srm_get_filename(client, &req->vh, &req->fh, req->filenames, &error);
+	filename = srm_get_filename(client, &req->vh, &req->fh, req->filenames, 0, &error);
 	if (!filename)
 		goto error;
 	if (type == 3) {
@@ -628,11 +630,13 @@ static void handle_srm_create_link(struct srm_client *client, struct srm_create_
 
 	purge = ntohl(req->purge_old_link);
 
-	old_filename = srm_get_filename(client,&req->vh, &req->fh_old, req->filenames, &error);
+	old_filename = srm_get_filename(client,&req->vh, &req->fh_old, req->filenames,
+					0, &error);
 	if (!old_filename)
 		goto error;
 
-	new_filename = srm_get_filename(client, &req->vh, &req->fh_new, req->filenames, &error);
+	new_filename = srm_get_filename(client, &req->vh, &req->fh_new, req->filenames,
+					ntohl(req->fh_old.file_name_sets), &error);
 	if (!new_filename)
 		goto error;
 
@@ -677,7 +681,7 @@ static void handle_srm_purgelink(struct srm_client *client, struct srm_purge_lin
 	GString *filename;
 	int error = 0;
 
-	filename = srm_get_filename(client, &req->vh, &req->fh, req->filenames, &error);
+	filename = srm_get_filename(client, &req->vh, &req->fh, req->filenames, 0, &error);
 	if (!filename)
 		goto error;
 
