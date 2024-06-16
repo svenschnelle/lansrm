@@ -11,6 +11,7 @@
 #include <netinet/in.h>
 #include <glib.h>
 #include <stdarg.h>
+#include "lansrm.h"
 #include "srm.h"
 
 static char *srm_to_c_string(char *s)
@@ -392,24 +393,24 @@ static struct srm_volume *srm_volume_from_vh(struct srm_client *client,
 	struct open_file_entry *entry = NULL;
 	struct srm_volume *volume;
 	int addr, present;
-	char *name;
+	char *driver, *name, *cat;
 
 	present = ntohl(vh->device_address_present);
 	addr = ntohl(vh->device_address.address1);
+	driver = srm_to_c_string(vh->driver_name);
+	cat = srm_to_c_string(vh->catalogue_organization);
+	name = srm_to_c_string(vh->volume_name);
 
-	srm_debug(SRM_DEBUG_FILE, client, "%s: addr present %d, addr %d, name '%s', %s\n", __func__,
-		present, addr, vh->volume_name, entry ? entry->filename->str : "");
+	srm_debug(SRM_DEBUG_REQUEST, client, "%s: present=%d, addr=%d, name='%s' driver='%s' cat='%s' %s\n", __func__,
+		  present, addr, name, driver, cat, entry ? entry->filename->str : "");
 
 	if (!present) {
-		name = srm_to_c_string(vh->volume_name);
 		volume = get_volume_by_name(client, name);
 		if (!volume) {
 			srm_debug(SRM_DEBUG_FILE, client, "%s: failed to get volume %s\n", __func__, name);
-			free(name);
 			*error = SRM_ERRNO_VOLUME_NOT_FOUND;
 			goto error;
 		}
-		free(name);
 	} else {
 		volume = get_volume_by_index(client, addr);
 		if (!volume) {
@@ -418,9 +419,11 @@ static struct srm_volume *srm_volume_from_vh(struct srm_client *client,
 			goto error;
 		}
 	}
-	return volume;
 error:
-	return NULL;
+	free(driver);
+	free(cat);
+	free(name);
+	return volume;
 }
 
 static GString *srm_get_filename(struct srm_client *client,
@@ -432,14 +435,9 @@ static GString *srm_get_filename(struct srm_client *client,
 	struct srm_volume *volume;
 	struct open_file_entry *entry;
 	GString *ret, *filename;
-
 	int wd = ntohl(fh->working_directory);
 
-	volume = srm_volume_from_vh(client, vh, error);
-	if (!volume)
-		return NULL;
-
-	ret = g_string_new(volume->path);
+	ret = g_string_sized_new(128);//volume->path);
 	if (wd) {
 		entry = g_tree_lookup(client->files, &wd);
 		if (!entry) {
@@ -447,6 +445,11 @@ static GString *srm_get_filename(struct srm_client *client,
 			return NULL;
 		}
 		g_string_append_printf(ret, "/%s", entry->filename->str);
+	} else {
+		volume = srm_volume_from_vh(client, vh, error);
+		if (!volume)
+			return NULL;
+		g_string_append_printf(ret, "/%s", volume->path);
 	}
 
 	filename = srm_filename_from_fh(fh, names, start);
@@ -480,9 +483,8 @@ static int client_insert_file_entry(struct srm_client *client, GString *filename
 static void handle_srm_open(struct srm_client *client, struct srm_file_open *req)
 {
 	struct srm_return_file_open ret = { 0 };
-	struct open_file_entry *entry;
-	uint32_t bootaddr = 0;
 	struct stat stbuf = { 0 };
+	uint32_t bootaddr = 0;
 	int fd = -1, error = 0;
 	uint16_t lif_type = 0;
 	off_t hdr_offset = 0;
@@ -524,7 +526,7 @@ static void handle_srm_open(struct srm_client *client, struct srm_file_open *req
 	}
 
 	ret.file_code = htonl(0xffff0000 | lif_type);
-	ret.open_logical_eof = htonl(stbuf.st_size > entry->hdr_offset ? (stbuf.st_size - entry->hdr_offset) : 0);
+	ret.open_logical_eof = htonl(stbuf.st_size > hdr_offset ? (stbuf.st_size - hdr_offset) : 0);
 	ret.boot_start_address = htonl(bootaddr);
 	ret.max_file_size = htonl(INT_MAX);
 	ret.max_record_size = htonl(256);
@@ -532,8 +534,8 @@ static void handle_srm_open(struct srm_client *client, struct srm_file_open *req
 insert:
 	ret.file_id = htonl(client_insert_file_entry(client, filename, fd, hdr_offset));
 error:
-	srm_debug(SRM_DEBUG_REQUEST, client, "%s: OPEN file='%s' fd=%d id=%08x error=%d\n",
-		  __func__, filename ? filename->str : "", fd, ntohl(ret.file_id), error);
+	srm_debug(SRM_DEBUG_REQUEST, client, "%s: OPEN file='%s' fd=%d id=%08x hdrsz=%s error=%d\n",
+		  __func__, filename ? filename->str : "", fd, ntohl(ret.file_id), hdr_offset, error);
 	if (filename && error)
 		g_string_free(filename, TRUE);
 	srm_send_response(client, req, &ret, sizeof(ret), 7, error);
@@ -587,7 +589,7 @@ static void handle_srm_catalog(struct srm_client *client, struct srm_catalog *re
 	g_list_free_full(names, free);
 	ret.num_files = htonl(cnt);
 error:
-	srm_debug(SRM_DEBUG_REQUEST, client, "%s: CAT '%s' start=%d max=%d sets=%d wd=%x results=%d error=%d\n",
+	srm_debug(SRM_DEBUG_REQUEST, client, "%s: CAT '%s' start=%d max=%d wd=%x results=%d error=%d\n",
 		  __func__, dirname ? dirname->str : "", start, max, ntohl(req->fh.working_directory), cnt, error);
 	if (dirname)
 		g_string_free(dirname, TRUE);

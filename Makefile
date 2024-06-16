@@ -7,7 +7,7 @@ all: lansrm
 lansrm: $(OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^
 
-%.o:	%.c Makefile srm.h
+%.o:	%.c Makefile lansrm.h srm.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:

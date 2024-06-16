@@ -9,11 +9,12 @@
 #include <netinet/ether.h>
 #include <errno.h>
 #include <sys/time.h>
-#include "srm.h"
 #include <glib.h>
 #include <arpa/inet.h>
 #include <getopt.h>
 #include <syslog.h>
+#include "lansrm.h"
+#include "srm.h"
 
 struct config config;
 
