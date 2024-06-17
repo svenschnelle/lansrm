@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 typedef enum srm_errno {
+	SRM_ERRNO_NO_ERROR = 0,
 	SRM_ERRNO_SOFTWARE_BUG = 31000,
 	SRM_ERRNO_BAD_SELECT_CODE = 31001,
 	SRM_ERRNO_UNALLOCATED_EXTENT = 31002,
@@ -54,10 +55,10 @@ typedef enum srm_errno {
 	SRM_ERRNO_FILE_LOCKED_PLEASE_RETRY = 31047,
 	SRM_ERRNO_NO_REPLY = 31048,
 	SRM_ERRNO_PURGE_ON_OPEN = 31049,
-	SRM_ERRNO_ERROR_TOP = 31049,
+	SRM_ERRNO_ERROR_TOP = 31050,
 } srm_errno_t;
 
-typedef enum srm_request {
+typedef enum {
 	SRM_REQ_WRITE = 1,
 	SRM_REQ_POSITION = 2,
 	SRM_REQ_READ = 3,
@@ -72,31 +73,32 @@ typedef enum srm_request {
 	SRM_REQ_CHANGE_PROTECT = 19,
 	SRM_REQ_VOLSTATUS = 22,
 	SRM_REQ_XCHG_OPEN = 29,
+	SRM_REQ_COPY_FILE = 30,
 	SRM_REQ_RESET = 1000,
-	SRM_REQ_AREYOUALIVE = 1001
+	SRM_REQ_AREYOUALIVE = 1001,
+	SRM_REQ_EXECUTE_CMD = 1200
 } srm_request_t;
 
 #define SRM_VOLNAME_LENGTH	16
 
 struct srm_send_header {
-	uint8_t srcaddr;		/* 0 */
-	uint8_t len_lo;			/* 1 */
-	uint8_t len_hi;			/* 2 */
-	uint8_t level;			/* 3 */
-	uint32_t message_length;	/* 0x04 */
-	uint32_t request_type;		/* 0x08 */
-	uint32_t user_sequencing_field;	/* 0xc */
+	uint8_t srcaddr;
+	uint8_t len_hi;
+	uint8_t len_lo;
+	uint8_t level;
+	uint32_t message_length;
+	uint32_t request_type;
+	uint32_t user_sequencing_field;
 } __packed;
 
 struct srm_return_header {
-	uint8_t srcaddr;		/* 0 */
-	uint8_t len_lo;			/* 1 */
-	uint8_t len_hi;			/* 2 */
-	uint8_t level;			/* 3 */
-	uint32_t message_length;	/* 4 */
-	uint32_t return_request_type;	/* 8 */
-	uint32_t user_sequencing_field;	/* 12 */
-	uint32_t status;		/* 16 */
+	uint8_t srcaddr;
+	uint8_t len_hi;
+	uint8_t len_lo;
+	uint8_t level;
+	uint32_t message_length;
+	uint32_t return_request_type;
+	uint32_t user_sequencing_field;
 } __packed;
 
 struct srm_date_type {
@@ -152,7 +154,6 @@ struct srm_volume_header {
 } __attribute__((packed));
 
 struct srm_volume_status {
-	struct srm_send_header hdr;
 	struct srm_volume_header vh;
 } __packed;
 
@@ -165,7 +166,6 @@ struct srm_volume_info {
 } __packed;
 
 struct srm_catalog {
-	struct srm_send_header hdr;
 	uint32_t max_num_files;
 	uint32_t file_index;
 	uint32_t __pad0;
@@ -175,8 +175,7 @@ struct srm_catalog {
 	struct srm_file_name_set filenames[0];
 } __packed;
 
-struct srm_file_open {
-	struct srm_send_header hdr;
+struct srm_open {
 	struct srm_volume_header vh;
 	struct srm_file_header fh;
 	uint32_t __pad0;
@@ -189,7 +188,6 @@ struct srm_file_open {
 } __packed;
 
 struct srm_write {
-	struct srm_send_header hdr;
 	uint32_t implicit_unlock;
 	uint32_t file_id;
 	uint32_t access_code;
@@ -202,7 +200,6 @@ struct srm_write {
 } __packed;
 
 struct srm_create_file {
-	struct srm_send_header hdr;
 	struct srm_volume_header vh;
 	struct srm_file_header fh;
 	uint32_t file_code;
@@ -219,7 +216,6 @@ struct srm_create_file {
 } __packed;
 
 struct srm_create_link {
-	struct srm_send_header hdr;
 	struct srm_volume_header vh;
 	struct srm_file_header fh_old;
 	struct srm_file_header fh_new;
@@ -228,14 +224,12 @@ struct srm_create_link {
 } __packed;
 
 struct srm_purge_link {
-	struct srm_send_header hdr;
 	struct srm_volume_header vh;
 	struct srm_file_header fh;
 	struct srm_file_name_set filenames[0];
 } __packed;
 
 struct srm_read {
-	struct srm_send_header hdr;
 	uint32_t implicit_unlock;
 	uint32_t file_id;
 	uint32_t access_code;
@@ -246,19 +240,16 @@ struct srm_read {
 } __packed;
 
 struct srm_fileinfo {
-	struct srm_send_header hdr;
 	uint32_t implicit_unlock;
 	uint32_t file_id;
 } __packed;
 
 struct srm_xchg_open {
-	struct srm_send_header hdr;
 	uint32_t file_id1;
 	uint32_t file_id2;
 } __packed;
 
 struct srm_close {
-	struct srm_send_header hdr;
 	uint32_t file_id;
 	char directory_password[16];
 	char file_password[16];
@@ -267,7 +258,6 @@ struct srm_close {
 } __packed;
 
 struct srm_position {
-	struct srm_send_header hdr;
 	uint32_t implicit_unlock;
 	uint32_t file_id;
 	uint16_t __pad0;
@@ -276,7 +266,7 @@ struct srm_position {
 } __packed;
 
 struct srm_return_volume_status {
-	struct srm_return_header hdr;
+	uint32_t status;
 	uint16_t __pad0;
 	uint8_t srmux;
 	uint8_t exist;
@@ -284,8 +274,8 @@ struct srm_return_volume_status {
 	char volname[SRM_VOLNAME_LENGTH];
 } __packed;
 
-struct srm_return_file_open {
-	struct srm_return_header hdr;
+struct srm_return_open {
+	uint32_t status;
 	uint32_t file_id;
 	uint32_t record_mode;
 	uint32_t max_record_size;
@@ -298,30 +288,30 @@ struct srm_return_file_open {
 } __packed;
 
 struct srm_return_catalog {
-	struct srm_return_header hdr;		/* 0 */
-	uint32_t __pad0;			/* 20 */
-	uint32_t num_files;			/* 24 */
+	uint32_t status;
+	uint32_t __pad0;
+	uint32_t num_files;
 	struct srm_file_info fi[8];
 } __packed;
 
 struct srm_return_read {
-	struct srm_return_header hdr;		/* 0 */
-	uint32_t actual;			/* 20 */
-	uint32_t __pad[4];			/* 24 */
-	uint8_t data[512];			/* 40 */
+	uint32_t status;
+	uint32_t actual;
+	uint32_t __pad[4];
+	uint8_t data[0];
 } __packed;
 
 struct srm_return_write {
-	struct srm_return_header hdr;		/* 0 */
-	uint32_t actual;			/* 20 */
+	uint32_t status;
+	uint32_t actual;
 } __packed;
 
 struct srm_return_empty {
-	struct srm_return_header hdr;		/* 0 */
+	uint32_t status;
 } __packed;
 
 struct srm_return_fileinfo {
-	struct srm_return_header hdr;		/* 0 */
+	uint32_t status;
 	uint32_t current_record;
 	struct srm_file_info fi;
 } __packed;
@@ -337,5 +327,20 @@ struct lif_header {
 	uint16_t volnr;
 	uint32_t gp;
 } __packed;
+
+struct srm_request_packet {
+	struct srm_send_header hdr;
+	uint8_t payload[2048];
+} __packed;
+
+struct srm_response_packet {
+	struct srm_return_header hdr;
+	uint8_t payload[2048];
+} __packed;
+
+struct srm_client;
+size_t srm_handle_request(struct srm_client *client,
+			  struct srm_request_packet *request,
+			  struct srm_response_packet *response);
 
 #endif /* SRM_H */

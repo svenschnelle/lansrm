@@ -1,10 +1,13 @@
 #ifndef LANSRM_H
 #define LANSRM_H
 
+#define __packed __attribute__((packed));
+
 #include <glib.h>
 #include <netinet/in.h>
+#include "srm.h"
 
-#define __packed __attribute__((packed));
+
 
 #define ARRAY_SIZE(x) (sizeof(x)/sizeof(x[0]))
 
@@ -56,7 +59,6 @@ struct srm_request_xfer {
 	uint16_t host_node;
 	uint8_t unum;
 	uint8_t sequence_no;
-	uint8_t data[0];
 } __packed;
 
 struct config {
@@ -70,13 +72,11 @@ struct config {
 extern struct config config;
 
 struct srm_client {
-	struct srm_request_xfer xfer;
 	struct sockaddr_in addr;
 	GList *volumes;
 	GTree *files;
 	int debug_level;
 	char *hostname;
-
 	int fd;
 };
 
@@ -96,8 +96,16 @@ struct open_file_entry {
 	int cwd;
 };
 
-void srm_handle_request(struct srm_client *client, void *buf, size_t len);
-void lansrm_send(struct srm_client *client, void *buf, size_t len);
+struct lansrm_response_packet {
+	struct srm_request_xfer xfer;
+	struct srm_response_packet srm;
+} __packed;
+
+struct lansrm_request_packet {
+	struct srm_request_xfer xfer;
+	struct srm_request_packet srm;
+} __packed;
+
 void srm_debug(int level, struct srm_client *client, char *fmt, ...);
 
 #endif

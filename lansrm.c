@@ -77,36 +77,45 @@ void srm_debug(int level, struct srm_client *client, char *fmt, ...)
 	g_string_free(msg, TRUE);
 }
 
-static void handle_srm_xfer(struct srm_client *client, struct srm_request_xfer *xfer, ssize_t len)
+static void handle_srm_xfer(struct srm_client *client,
+			    struct lansrm_request_packet *request,
+			    size_t len)
 {
+	struct lansrm_response_packet response = { 0 };
+	struct srm_request_xfer *xfer = &request->xfer;
+	size_t srmlen, rlen = 0;
+
 	srm_debug(SRM_DEBUG_XFER, client, "%s: session=%d, version=%d, host_node=%d, unum=%d, sequence_no=%d\n",
 		__func__, ntohs(xfer->session_id), ntohs(xfer->version),
 		ntohs(xfer->host_node), xfer->unum, xfer->sequence_no);
 
-	if (len < (ssize_t)sizeof(*xfer))
-		return;
-	hexdump(SRM_DEBUG_PACKET_RX, client, "RX",
-		xfer->data, len - sizeof(*xfer));
-	srm_handle_request(client, xfer->data, len - sizeof(*xfer) - 4);
-}
+	if (len < offsetof(struct lansrm_request_packet, srm.payload)) {
+		response.xfer.ret_code = htons(5); // BAD SIZE
+		goto send;
+	}
+	hexdump(SRM_DEBUG_PACKET_RX, client, "RX DAT", request, len);
+//	hexdump(SRM_DEBUG_PACKET_RX, client, "RX XFR", &request->xfer, sizeof(request->xfer));
+//	hexdump(SRM_DEBUG_PACKET_RX, client, "RX HDR", &request->srm.hdr, sizeof(request->srm.hdr));
 
-void lansrm_send(struct srm_client *client, void *buf, size_t len)
-{
-	struct srm_request_xfer *xfer;
-	char tmp[1024];
+	srmlen = len - offsetof(struct lansrm_request_packet, srm);
+	if (srmlen < ntohl(request->srm.hdr.message_length)) {
+		srm_debug(SRM_DEBUG_ERROR, client, "bad srm message size: %zd < %zd\n",
+			  srmlen, ntohl(request->srm.hdr.message_length));
+		response.xfer.ret_code = htons(5); // BAD SIZE
+		goto send;
+	}
+//	hexdump(SRM_DEBUG_PACKET_RX, client, "RX DAT", &request->srm.payload, srmlen);
+	rlen = srm_handle_request(client, &request->srm, &response.srm);
+send:
+	rlen += sizeof(struct srm_request_xfer);
+	memcpy(&response.xfer, &request->xfer, sizeof(struct srm_request_xfer));
+	response.xfer.rec_type = htons(SRM_REPLY_XFER);
+	hexdump(SRM_DEBUG_PACKET_TX, client, "TX", &response, rlen);
 
-	// FIXME: avoid copy / fix size checking
-	xfer = (struct srm_request_xfer *)tmp;
-	memcpy(xfer, &client->xfer, sizeof(client->xfer));
-	memcpy(xfer->data, buf, len);
-
-	xfer->rec_type = htons(SRM_REPLY_XFER);
-	hexdump(SRM_DEBUG_PACKET_TX, client, "TX", tmp,
-		len + sizeof(struct srm_request_xfer));
-
-	if (sendto(client->fd, tmp, sizeof(struct srm_request_xfer) + len, 0,
+	if (sendto(client->fd, &response, rlen, 0,
 		   (struct sockaddr *)&client->addr, sizeof(struct sockaddr_in)) == -1)
 		srm_debug(SRM_DEBUG_ERROR, client, "sendto: %m\n");
+
 }
 
 static int lansrm_file_compare(const void *a, const void *b)
@@ -301,6 +310,7 @@ static void handle_rx(int fd, GTree *clients, struct sockaddr_in *addr,
 		      socklen_t addrlen, void *buf, size_t len)
 {
 	struct srm_client *client = NULL;
+	struct lansrm_request_packet *packet = buf;
 	char ipstr[INET_ADDRSTRLEN];
 
 	if (!inet_ntop(AF_INET, &addr->sin_addr.s_addr, ipstr, addrlen)) {
@@ -308,7 +318,7 @@ static void handle_rx(int fd, GTree *clients, struct sockaddr_in *addr,
 		return;
 	}
 
-	switch (ntohs(*(uint16_t *)buf)) {
+	switch (ntohs(packet->xfer.rec_type)) {
 	case SRM_REQUEST_CONNECT:
 		if (len < sizeof(struct srm_request_connect)) {
 			srm_debug(SRM_DEBUG_ERROR, NULL, "short srm request: %zd bytes\n", len);
@@ -323,7 +333,6 @@ static void handle_rx(int fd, GTree *clients, struct sockaddr_in *addr,
 			break;
 		}
 		client = g_tree_lookup(clients, addr);
-		// TODO: avoid copy
 		if (!client) {
 			if (!g_key_file_get_boolean(config.keyfile, "global", "accept_unknown", NULL)) {
 				srm_debug(SRM_DEBUG_ERROR, client, "client without connect: %s\n", ipstr);
@@ -334,16 +343,15 @@ static void handle_rx(int fd, GTree *clients, struct sockaddr_in *addr,
 					   (struct sockaddr *)addr, addrlen) == -1) {
 					srm_debug(SRM_DEBUG_ERROR, client, "sendto: %m\n");
 				}
+				break;
 			} else {
 				client = srm_new_client(clients, fd, addr, addrlen, NULL, NULL);
 				client->hostname = g_strdup(ipstr);
 				srm_read_volumes(client);
 				memcpy(&client->addr, addr, sizeof(struct sockaddr_in));
 			}
-			break;
 		}
-		memcpy(&client->xfer, buf, sizeof(struct srm_request_xfer));
-		handle_srm_xfer(client, (struct srm_request_xfer *)buf, len);
+		handle_srm_xfer(client, packet, len);
 		break;
 
 	case SRM_REPLY_XFER:
@@ -378,12 +386,16 @@ static int loop(GTree *clients, int fd)
 
 		if (FD_ISSET(fd, &rfds)) {
 			socklen_t addrlen = sizeof(addr);
-			uint8_t buf[1024];
-			ssize_t len = recvfrom(fd, buf, sizeof(buf), 0, (struct sockaddr *)&addr, &addrlen);
+			struct lansrm_request_packet packet;
+
+			memset(&packet, 0, sizeof(packet));
+			ssize_t len = recvfrom(fd, &packet, sizeof(packet), 0, (struct sockaddr *)&addr, &addrlen);
 			if (len == -1 && errno != EAGAIN)
 				return 1;
+			if (len == sizeof(packet))
+				continue;
 			if (len > 2)
-				handle_rx(fd, clients, &addr, addrlen, buf, len);
+				handle_rx(fd, clients, &addr, addrlen, &packet, len);
 		}
 
 		if (FD_ISSET(fd, &efds)) {
