@@ -106,6 +106,6 @@ struct lansrm_request_packet {
 	struct srm_request_packet srm;
 } __packed;
 
-void srm_debug(int level, struct srm_client *client, char *fmt, ...);
+void srm_debug(int level, struct srm_client *client, char *fmt, ...) __attribute__ ((format (printf, 3, 4)));
 
 #endif

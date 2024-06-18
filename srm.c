@@ -11,6 +11,7 @@
 #include <netinet/in.h>
 #include <glib.h>
 #include <stdarg.h>
+#include <endian.h>
 #include "lansrm.h"
 #include "srm.h"
 
@@ -68,17 +69,24 @@ static int errno_to_srm_error(struct srm_client *client)
 	switch(errno) {
 	case 0:
 		return 0;
+	case ENOSPC:
+		return SRM_ERRNO_INSUFFICIENT_DISK_SPACE;
+	case EEXIST:
+		return SRM_ERRNO_DUPLICATE_FILENAMES;
+	case EXDEV:
+		return SRM_ERRNO_RENAME_ACROSS_VOLUMES;
 	case ENOENT:
 		return SRM_ERRNO_FILE_NOT_FOUND;
 	case EPERM:
 	case EACCES:
 		return SRM_ERRNO_ACCESS_TO_FILE_NOT_ALLOWED;
 	case EISDIR:
-		return 0;
+	case ENOTDIR:
+		return SRM_ERRNO_FILE_NOT_FOUND;
 	case EIO:
 		return SRM_ERRNO_VOLUME_IO_ERROR;
 	default:
-		srm_debug(SRM_DEBUG_FILE, client, "%s: unhandled errno %d (%m)\n", __func__);
+		srm_debug(SRM_DEBUG_FILE, client, "%s: unhandled errno %d (%m)\n", __func__, errno);
 		return SRM_ERRNO_SOFTWARE_BUG;
 	}
 }
@@ -182,7 +190,7 @@ static int handle_srm_read(struct srm_client *client,
 	*responselen = offsetof(struct srm_return_read, data) + len;
 
 	srm_debug(SRM_DEBUG_REQUEST, client, "%s: READ file id=%x size=%d "
-		  "actual=%zd offset=%x accesscode=%d, hdr_offset=%zx error=%zd\n",
+		  "actual=%zd offset=%x accesscode=%d, hdr_offset=%zx\n",
 		  __func__, entry ? entry->client_fd : 0,
 		  requested, len, offset, acc, entry->hdr_offset);
 	return len != requested ? SRM_ERRNO_EOF_ENCOUNTERED : 0;
@@ -202,7 +210,7 @@ static int handle_srm_set_eof(struct srm_client *client,
 	return SRM_ERRNO_SOFTWARE_BUG;
 }
 
-static int get_lif_info(int fd, uint16_t *out, uint32_t *bootaddr, off_t *hdr_offset)
+static int get_lif_info(int fd, uint32_t *out, uint32_t *bootaddr, off_t *hdr_offset)
 {
 	struct lif_header hdr;
 	char buf[8];
@@ -225,7 +233,7 @@ static int get_lif_info(int fd, uint16_t *out, uint32_t *bootaddr, off_t *hdr_of
 		return -1;
 
 	*hdr_offset += 0x20;
-	*out = ntohs(hdr.type);
+	*out = 0xffff0000 | be16toh(hdr.type);
 	*bootaddr = ntohl(hdr.gp);
 	return 0;
 }
@@ -245,47 +253,77 @@ static off_t srm_file_size(off_t size, off_t hdr_offset)
 	return (off_t)(size - hdr_offset);
 }
 
+static int srm_map_filetype(mode_t mode)
+{
+	if (S_ISREG(mode))
+		return SRM_FILETYPE_REG_FILE;
+	if (S_ISDIR(mode))
+		return SRM_FILETYPE_DIRECTORY;
+	if (S_ISFIFO(mode))
+		return SRM_FILETYPE_PIPEFIFO;
+	if (S_ISCHR(mode))
+		return SRM_FILETYPE_CHARDEV;
+	if (S_ISBLK(mode))
+		return SRM_FILETYPE_BLOCKDEV;
+	return SRM_FILETYPE_UNKNOWN;
+}
+
 static int get_file_info(char *filename, struct srm_file_info *fi)
 
 {
-	uint16_t lif_type = 0xffff;
+	srm_filetype_t filetype;
 	uint32_t bootaddr = 0;
+	uint32_t lif_type;
 	struct stat stbuf;
 	off_t hdr_offset;
+
 	char *p;
 
 	if (lstat(filename, &stbuf) == -1)
 		return -1;
 
 	fi->perm = htons(stbuf.st_mode & 0777);
-
-	if (S_ISREG(stbuf.st_mode)) {
-		int fd = open(filename, O_RDONLY);
-		if (fd == -1)
-			return -1;
-		get_lif_info(fd, &lif_type, &bootaddr, &hdr_offset);
-		close(fd);
-		fi->max_record_size = htonl(256);
-		fi->logical_eof = htonl(srm_file_size(stbuf.st_size, hdr_offset));
-		fi->physical_size = htonl(srm_file_size(stbuf.st_size, hdr_offset) / 256);
-	} else if (S_ISDIR(stbuf.st_mode)) {
-		lif_type = 0xff03;
+	filetype = srm_map_filetype(stbuf.st_mode);
+	switch (filetype) {
+	case SRM_FILETYPE_DIRECTORY:
+		fi->file_code = htonl(3);
+		fi->record_mode = htonl(1);
 		fi->record_mode = htonl(1);
 		fi->share_code = htonl(1);
 		fi->max_record_size = htonl(1);
 		fi->logical_eof = htonl(1024);
 		fi->physical_size = htonl(1);
-	} else {
-		return -1;
+		break;
+
+	case SRM_FILETYPE_CHARDEV:
+	case SRM_FILETYPE_BLOCKDEV:
+	case SRM_FILETYPE_PIPEFIFO:
+	case SRM_FILETYPE_REMOTE_PROCESS:
+	case SRM_FILETYPE_UNKNOWN:
+		fi->record_mode = 0;
+		fi->file_code = htonl(0xffffe961);
+		break;
+
+	case SRM_FILETYPE_REG_FILE:
+		fi->file_code = htonl(0xffffe94b);
+		int fd = open(filename, O_RDONLY);
+		if (fd == -1)
+			return -1;
+		if (get_lif_info(fd, &lif_type, &bootaddr, &hdr_offset) == -1)
+			break;
+		close(fd);
+		fi->file_code = htonl(lif_type);
+		fi->max_record_size = htonl(256);
+		fi->logical_eof = htonl(srm_file_size(stbuf.st_size, hdr_offset));
+		fi->physical_size = htonl(srm_file_size(stbuf.st_size, hdr_offset) / 256);
+		break;
 	}
 
-	fi->file_code = htonl(0xffff0000 | lif_type);
 	fi->max_file_size = htonl(-1);
 	fi->last_access.id = htons(stbuf.st_gid);
 	fi->creation_date.id = htons(stbuf.st_uid);
 	unix_to_srm_time(&fi->last_access, &stbuf.st_mtime, stbuf.st_gid);
 	unix_to_srm_time(&fi->creation_date, &stbuf.st_ctime, stbuf.st_uid);
-
 
 	if ((p = strrchr(filename, '/')))
 		p++;
@@ -457,14 +495,15 @@ static int handle_srm_open(struct srm_client *client,
 	struct stat stbuf = { 0 };
 	uint32_t bootaddr = 0;
 	int fd = -1, error = 0;
-	uint16_t lif_type = 0;
+	uint32_t lif_type = 0;
 	off_t hdr_offset = 0;
 	GString *filename;
+	srm_filetype_t filetype, opentype;
 
-	srm_debug(SRM_DEBUG_REQUEST, client, "%s: share_code %x, open_type: %x pad: %x %x %x %x\n", __func__,
-		  ntohl(request->share_code), ntohs(request->open_type),
-		  ntohl(request->__pad0), ntohl(request->__pad1),
-		  ntohl(request->__pad2), ntohl(request->__pad3));
+	opentype = ntohl(request->open_type);
+	srm_debug(SRM_DEBUG_REQUEST, client, "%s: share_code %x, open_type: %x pad: %x %x %x\n", __func__,
+		  ntohl(request->share_code), opentype,
+		  ntohl(request->__pad0), ntohl(request->__pad1), ntohl(request->__pad2));
 	filename = srm_get_filename(client, &request->vh,
 				    &request->fh, request->filenames, 0, &errno);
 	if (!filename) {
@@ -472,46 +511,84 @@ static int handle_srm_open(struct srm_client *client,
 		goto error;
 	}
 
-	fd = open(filename->str, O_RDWR);
-	if (fd == -1 && errno == EISDIR) {
+	if (lstat(filename->str, &stbuf) == -1) {
+		error = errno_to_srm_error(client);
+		goto error;
+	}
+
+	filetype = srm_map_filetype(stbuf.st_mode);
+
+	if (opentype == SRM_FILETYPE_DIRECTORY && opentype != filetype) {
+		error = SRM_ERRNO_FILE_NOT_DIRECTORY;
+		goto error;
+	}
+
+	response->share_bits = htonl(0xffffffff);
+	switch(filetype) {
+	case SRM_FILETYPE_DIRECTORY:
 		fd = open(filename->str, O_DIRECTORY);
-		if (fd != -1) {
-			response->file_code = ntohl(0xffffff03);
-			response->record_mode = ntohl(1);
-			response->max_file_size = ntohl(1024);
-			response->max_record_size = ntohl(1);
-			response->open_logical_eof = ntohl(1024);
-			response->share_bits = 0;
-			goto insert;
+		if (fd == -1) {
+			error = errno_to_srm_error(client);
+			break;
 		}
-	}
+		response->file_code = ntohl(3);
+		response->record_mode = ntohl(1);
+		response->max_record_size = ntohl(256);
+		break;
 
-	if (fd == -1) {
-		error = errno_to_srm_error(client);
-		goto error;
-	}
+	case SRM_FILETYPE_CHARDEV:
+	case SRM_FILETYPE_BLOCKDEV:
+	case SRM_FILETYPE_PIPEFIFO:
+	case SRM_FILETYPE_REG_FILE:
+		response->file_code = htonl(0xffffe94b);
+		switch (ntohs(request->open_type)) {
+		case SRM_OPENTYPE_RDWR:
+			fd = open(filename->str, O_RDWR);
+			if (fd != -1)
+				break;
+			/* fallthrough */
+		case SRM_OPENTYPE_RDONLY:
+			fd = open(filename->str, O_RDONLY);
+			break;
+		default:
+			error = SRM_ERRNO_ACCESS_TO_FILE_NOT_ALLOWED;
+			break;
+		}
 
-	if (fstat(fd, &stbuf) == -1) {
-		error = errno_to_srm_error(client);
-		goto error;
-	}
+		if (fd == -1) {
+			error = errno_to_srm_error(client);
+			break;
+		}
 
-	get_lif_info(fd, &lif_type, &bootaddr, &hdr_offset);
-	if (lseek(fd, hdr_offset, SEEK_SET) == -1) {
-		errno = errno_to_srm_error(client);
-		goto error;
-	}
+		if (filetype != SRM_FILETYPE_REG_FILE)
+			break;
 
-	response->file_code = htonl(0x0000 | lif_type);
-	response->open_logical_eof = htonl(stbuf.st_size > hdr_offset ? (stbuf.st_size - hdr_offset) : 0);
-	response->boot_start_address = htonl(bootaddr);
-	response->max_file_size = htonl(INT_MAX);
-	response->max_record_size = htonl(256);
-	response->share_bits = htonl(0);
-insert:
+		get_lif_info(fd, &lif_type, &bootaddr, &hdr_offset);
+		if (lseek(fd, stbuf.st_size, SEEK_SET) == -1) {
+			error = errno_to_srm_error(client);
+			break;
+		}
+
+		response->file_code = htonl(lif_type);
+		response->open_logical_eof = htonl(stbuf.st_size > hdr_offset ? (stbuf.st_size - hdr_offset) : 0);
+		response->boot_start_address = htonl(bootaddr);
+		response->max_file_size = htonl(INT_MAX);
+		response->max_record_size = htonl(256);
+		break;
+
+	case SRM_FILETYPE_UNKNOWN:
+	case SRM_FILETYPE_REMOTE_PROCESS:
+		error = SRM_ERRNO_FILE_NOT_FOUND;
+		break;
+		response->record_mode = 0;
+		response->file_code = htonl(0xffffe94b);
+		break;
+	}
+	response->open_logical_eof = htonl(stbuf.st_size - hdr_offset);
+	response->sec_ext_size = htonl(stbuf.st_size - hdr_offset);
 	response->file_id = htonl(client_insert_file_entry(client, filename, fd, hdr_offset));
 error:
-	srm_debug(SRM_DEBUG_REQUEST, client, "%s: OPEN file='%s' fd=%d id=%08x hdrsz=%d error=%d\n",
+	srm_debug(SRM_DEBUG_REQUEST, client, "%s: OPEN file='%s' fd=%d id=%08x hdrsz=%ld error=%d\n",
 		  __func__, filename ? filename->str : "", fd, ntohl(response->file_id), hdr_offset, error);
 	if (filename && error)
 		g_string_free(filename, TRUE);
@@ -530,51 +607,77 @@ static int handle_srm_catalog(struct srm_client *client,
 			      int *responselen)
 {
 	struct dirent *dirent = NULL;
-	GString *dirname = NULL;
+	GString *filename = NULL;
 	int start, max, cnt = 0;
 	GList *names = NULL;
 	int error = SRM_ERRNO_NO_ERROR;
+	srm_filetype_t filetype;
+	struct stat stbuf;
 	DIR *dir;
 
 	max = ntohl(request->max_num_files);
 	start = ntohl(request->file_index);
 
-	dirname = srm_get_filename(client, &request->vh, &request->fh,
+	filename = srm_get_filename(client, &request->vh, &request->fh,
 				   request->filenames, 0, &error);
-	if (!dirname)
+	if (!filename)
 		goto error;
 
-	dir = opendir(dirname->str);
-	if (!dir) {
+	if (lstat(filename->str, &stbuf) == -1) {
 		error = errno_to_srm_error(client);
 		goto error;
 	}
 
-	while ((dirent = readdir(dir)))
-		names = g_list_insert_sorted(names, g_strdup(dirent->d_name), srm_dir_compare);
+	filetype = srm_map_filetype(stbuf.st_mode);
+	switch(filetype) {
+	case SRM_FILETYPE_DIRECTORY:
+		dir = opendir(filename->str);
+		if (!dir) {
+			error = errno_to_srm_error(client);
+			break;
+		}
 
-	closedir(dir);
+		while ((dirent = readdir(dir)))
+			names = g_list_insert_sorted(names, g_strdup(dirent->d_name), srm_dir_compare);
+		closedir(dir);
 
-	if (start < 1)
-		start = 1;
+		if (start < 1)
+			start = 1;
 
-	GList *p = g_list_nth(names, start - 1);
-	for (cnt = 0;  p && cnt < max; p = g_list_next(p)) {
-		GString *fullname = g_string_new(dirname->str);
-		g_string_append_printf(fullname, "/%s", (char *)p->data);
-		if (!get_file_info(fullname->str, &response->fi[cnt]))
-			cnt++;
-		g_string_free(fullname, TRUE);
-
+		GList *p = g_list_nth(names, start - 1);
+		for (cnt = 0;  p && cnt < max; p = g_list_next(p)) {
+			GString *fullname = g_string_new(filename->str);
+			g_string_append_printf(fullname, "/%s", (char *)p->data);
+			if (!get_file_info(fullname->str, &response->fi[cnt]))
+				cnt++;
+			g_string_free(fullname, TRUE);
+		}
+		g_list_free_full(names, free);
+		response->num_files = htonl(cnt);
+		break;
+	case SRM_FILETYPE_REG_FILE:
+		if (get_file_info(filename->str, &response->fi[0]) == -1) {
+			error = SRM_ERRNO_VOLUME_IO_ERROR;
+			break;
+		}
+		response->num_files = htonl(1);
+		break;
+	case SRM_FILETYPE_BLOCKDEV:
+	case SRM_FILETYPE_CHARDEV:
+	case SRM_FILETYPE_PIPEFIFO:
+	case SRM_FILETYPE_UNKNOWN:
+	case SRM_FILETYPE_REMOTE_PROCESS:
+		response->fi[0].file_code = htonl(0xffffe961);
+		response->fi[0].record_mode = 0;
+		response->num_files = htonl(1);
+		break;
 	}
-	g_list_free_full(names, free);
-	response->num_files = htonl(cnt);
 error:
 	srm_debug(SRM_DEBUG_REQUEST, client, "%s: CAT '%s' start=%d max=%d wd=%x results=%d error=%d\n",
-		  __func__, dirname ? dirname->str : "", start, max, ntohl(request->fh.working_directory),
+		  __func__, filename ? filename->str : "", start, max, ntohl(request->fh.working_directory),
 		  cnt, error);
-	if (dirname)
-		g_string_free(dirname, TRUE);
+	if (filename)
+		g_string_free(filename, TRUE);
 	*responselen = sizeof(*response);
 	return error;
 }
@@ -585,11 +688,11 @@ static int handle_srm_createfile(struct srm_client *client,
 	int fd, type, error = 0;
 	GString *filename;
 
-	type = ntohl(request->file_code) & 0xffff;
+	type = ntohl(request->file_code);
 	filename = srm_get_filename(client, &request->vh, &request->fh,
 				    request->filenames, 0, &error);
 	if (!filename)
-		goto error;
+		return SRM_ERRNO_FILE_PATHNAME_MISSING;
 	if (type == 3) {
 		if (mkdir(filename->str, 0755) == -1)
 			error = errno_to_srm_error(client);
@@ -601,13 +704,13 @@ static int handle_srm_createfile(struct srm_client *client,
 		}
 		struct lif_header buf = { 0 };
 		memcpy(buf.name, "WS_FILE   ", 10);
-		buf.type = request->file_code >> 16;
-		buf.gp = request->boot_start_address;
+		buf.type = htobe16(type & 0xffff);
+		buf.gp = htole32(request->boot_start_address);
 		if (write(fd, &buf, sizeof(buf)) == -1 || close(fd) == -1)
 			error = errno_to_srm_error(client);
 	}
 error:
-	srm_debug(SRM_DEBUG_FILE, client, "%s: CREATE FILE: %s %08x\n", __func__, filename, type);
+	srm_debug(SRM_DEBUG_REQUEST, client, "%s: CREATE FILE: filename='%s' %08x\n", __func__, filename->str, type);
 	g_string_free(filename, TRUE);
 	return error;
 }
@@ -663,6 +766,7 @@ static int handle_srm_volstatus(struct srm_client *client,
 		c_string_to_srm(response->volname, volume->name);
 		response->exist = 1;
 		response->srmux = 1;
+		response->interleave = htonl(512);
 	}
 	srm_debug(SRM_DEBUG_REQUEST, client, "%s: VOLSTATUS vname='%s' error=%d\n",
 		  __func__, volume ? volume->name : "", error);
@@ -728,7 +832,7 @@ static int handle_srm_xchg_open(struct srm_client *client,
 		return errno_to_srm_error(client);
 	}
 
-	srm_debug(SRM_DEBUG_REQUEST, client, "XCHG OPEN: id1=%x name1='%s' id2=%x name2='%s' error=%d\n",
+	srm_debug(SRM_DEBUG_REQUEST, client, "XCHG OPEN: id1=%x name1='%s' id2=%x name2='%s'\n",
 		  id1, entry1 ? entry1->filename->str : "", id2, entry2 ? entry2->filename->str : "");
 	if (tmpname)
 		g_string_free(tmpname, TRUE);
@@ -976,7 +1080,7 @@ size_t srm_handle_request(struct srm_client *client,
 		break;
 
 	default:
-		srm_debug(SRM_DEBUG_REQUEST, client, "%s: unknown request %d, level %d\n",
+		srm_debug(SRM_DEBUG_REQUEST, client, "%s: unknown request %d\n",
 			__func__, ntohl(request->hdr.request_type));
 		break;
 	}

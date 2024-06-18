@@ -93,29 +93,29 @@ static void handle_srm_xfer(struct srm_client *client,
 		response.xfer.ret_code = htons(5); // BAD SIZE
 		goto send;
 	}
-	hexdump(SRM_DEBUG_PACKET_RX, client, "RX DAT", request, len);
-//	hexdump(SRM_DEBUG_PACKET_RX, client, "RX XFR", &request->xfer, sizeof(request->xfer));
-//	hexdump(SRM_DEBUG_PACKET_RX, client, "RX HDR", &request->srm.hdr, sizeof(request->srm.hdr));
+	hexdump(SRM_DEBUG_PACKET_RX, client, "RX XFR", &request->xfer, sizeof(request->xfer));
+	hexdump(SRM_DEBUG_PACKET_RX, client, "RX HDR", &request->srm.hdr, sizeof(request->srm.hdr));
 
 	srmlen = len - offsetof(struct lansrm_request_packet, srm);
 	if (srmlen < ntohl(request->srm.hdr.message_length)) {
-		srm_debug(SRM_DEBUG_ERROR, client, "bad srm message size: %zd < %zd\n",
+		srm_debug(SRM_DEBUG_ERROR, client, "bad srm message size: %zd < %d\n",
 			  srmlen, ntohl(request->srm.hdr.message_length));
 		response.xfer.ret_code = htons(5); // BAD SIZE
 		goto send;
 	}
-//	hexdump(SRM_DEBUG_PACKET_RX, client, "RX DAT", &request->srm.payload, srmlen);
+	hexdump(SRM_DEBUG_PACKET_RX, client, "RX DAT", &request->srm.payload, srmlen);
 	rlen = srm_handle_request(client, &request->srm, &response.srm);
 send:
-	rlen += sizeof(struct srm_request_xfer);
 	memcpy(&response.xfer, &request->xfer, sizeof(struct srm_request_xfer));
 	response.xfer.rec_type = htons(SRM_REPLY_XFER);
-	hexdump(SRM_DEBUG_PACKET_TX, client, "TX", &response, rlen);
+	hexdump(SRM_DEBUG_PACKET_RX, client, "TX XFR", &response.xfer, sizeof(response.xfer));
+	hexdump(SRM_DEBUG_PACKET_RX, client, "TX HDR", &response.srm.hdr, sizeof(response.srm.hdr));
+	hexdump(SRM_DEBUG_PACKET_RX, client, "TX DAT", &response.srm.payload, rlen);
 
+	rlen += sizeof(struct srm_request_xfer);
 	if (sendto(client->fd, &response, rlen, 0,
 		   (struct sockaddr *)&client->addr, sizeof(struct sockaddr_in)) == -1)
 		srm_debug(SRM_DEBUG_ERROR, client, "sendto: %m\n");
-
 }
 
 static int lansrm_file_compare(const void *a, const void *b)
@@ -152,7 +152,7 @@ static int srm_connect_fill_ip_node(struct srm_reply *reply, struct srm_client *
 
 	tmp = g_key_file_get_string(config.keyfile, "global", "hostip", NULL);
 	if (!tmp) {
-		srm_debug(SRM_DEBUG_CONNECT, client, "no hostip set in global section\n", hwaddr_string);
+		srm_debug(SRM_DEBUG_CONNECT, client, "no hostip set in global section\n");
 		return -1;
 	}
 	ret = inet_pton(AF_INET, tmp, &hostaddr);

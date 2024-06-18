@@ -79,6 +79,21 @@ typedef enum {
 	SRM_REQ_EXECUTE_CMD = 1200
 } srm_request_t;
 
+typedef enum {
+	SRM_FILETYPE_REG_FILE=1,
+	SRM_FILETYPE_DIRECTORY=2,
+	SRM_FILETYPE_CHARDEV=3,
+	SRM_FILETYPE_BLOCKDEV=4,
+	SRM_FILETYPE_PIPEFIFO=5,
+	SRM_FILETYPE_UNKNOWN=6,
+	SRM_FILETYPE_REMOTE_PROCESS=7
+} srm_filetype_t;
+
+typedef enum {
+	SRM_OPENTYPE_RDWR=0,
+	SRM_OPENTYPE_RDONLY=1
+} srm_opentype_t;
+
 #define SRM_VOLNAME_LENGTH	16
 
 struct srm_send_header {
@@ -133,8 +148,7 @@ struct srm_address {
 struct srm_file_header {
 	uint32_t file_name_sets;
 	uint32_t working_directory;
-	uint16_t __pad0;
-	uint16_t path_type;
+	uint32_t path_type;
 	char root_password[16];
 } __packed;
 
@@ -182,8 +196,7 @@ struct srm_open {
 	uint32_t __pad1;
 	uint32_t share_code;
 	uint32_t __pad2;
-	uint16_t __pad3;
-	uint16_t open_type;
+	uint32_t open_type;
 	struct srm_file_name_set filenames[0];
 } __packed;
 
