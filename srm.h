@@ -278,6 +278,13 @@ struct srm_position {
 	uint32_t offset;
 } __packed;
 
+struct srm_set_eof {
+	uint32_t __pad0;
+	uint32_t file_id;
+	uint32_t position_type;
+	uint32_t offset;
+};
+
 struct srm_return_volume_status {
 	uint32_t status;
 	uint16_t __pad0;

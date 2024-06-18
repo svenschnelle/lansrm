@@ -202,17 +202,30 @@ static int handle_srm_read(struct srm_client *client,
 }
 
 static int handle_srm_set_eof(struct srm_client *client,
-			       void *request,
-			      struct srm_return_empty *response,
-			      int *responselen)
+			      struct srm_set_eof *request)
 {
-	(void)request;
-	(void)response;
-	(void)responselen;
+	struct open_file_entry *entry;
+	uint32_t id, offset;
+	uint8_t whence;
+	off_t pos;
 
-	// TODO
-	srm_debug(SRM_DEBUG_FILE, client, "%s: SET EOF\n", __func__);
-	return SRM_ERRNO_SOFTWARE_BUG;
+	offset = ntohl(request->offset);
+	whence = request->position_type ? SEEK_CUR : SEEK_SET;
+	id = ntohl(request->file_id);
+
+	entry = find_file_entry(client, id);
+	if (!entry)
+		return SRM_ERRNO_FILE_UNOPENED;
+	if (whence == SEEK_SET)
+		offset += entry->hdr_offset;
+	pos = lseek(entry->fd, offset, whence);
+	if (pos == -1)
+		return errno_to_srm_error(client);
+	if (ftruncate(entry->fd, pos) == -1)
+		return errno_to_srm_error(client);
+	srm_debug(SRM_DEBUG_FILE, client, "%s: SET EOF: relative=%d pos=%08lx\n", __func__,
+		  whence, pos + 1);
+	return 0;
 }
 
 static int get_lif_info(int fd, uint32_t *out, uint32_t *bootaddr, off_t *hdr_offset)
@@ -1043,8 +1056,7 @@ size_t srm_handle_request(struct srm_client *client,
 		break;
 
 	case SRM_REQ_SET_EOF:
-		ret = handle_srm_set_eof(client, (void *)request->payload,
-					 (void *)(void *)response->payload, &responselen);
+		ret = handle_srm_set_eof(client, (void *)request->payload);
 		break;
 
 	case SRM_REQ_FILEINFO:
