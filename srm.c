@@ -66,7 +66,7 @@ static int handle_srm_reset(struct srm_client *client)
 
 static int handle_srm_areyoualive(void)
 {
-	return 1;
+	return 0x01000000;
 }
 
 static int errno_to_srm_error(struct srm_client *client)
