@@ -767,7 +767,7 @@ void srm_handle_request(struct srm_client *client, void *buf, size_t len)
 		return;
 	}
 
-	length = ntohl(hdr->message_length) + 4;
+	length = ntohl(hdr->message_length);
 
 	if (len  < length) {
 		srm_debug(SRM_DEBUG_FILE, client, "%s: len %zd < message_length %zd\n",

@@ -18,11 +18,38 @@
 
 struct config config;
 
-static void hexdump(uint8_t *buf, size_t len)
+static void hexdump_line(char *out, uint8_t *buf, size_t len)
 {
-	while(len--)
-		printf("%02X ", *buf++);
-	printf("\n");
+	for (size_t i = 0; i < 16; i++) {
+		if (!(i % 4))
+			*out++ = ' ';
+		if (i < len)
+			sprintf(out, "%02X ", buf[i]);
+		else
+			memset(out, ' ', 3);
+		out += 3;
+	}
+
+	for (size_t i = 0; i < len; i++) {
+		char c = buf[i];
+		if (c < 0x20)
+			c = '.';
+		sprintf(out++, "%c", c);
+	}
+}
+
+static void hexdump(int level, struct srm_client *client,
+		    char *prefix, void *buf, size_t len)
+{
+	char out[128] = { 0 };
+
+	if (!(config.debug & level))
+		return;
+
+	for (size_t offset = 0; offset < len; offset += 16) {
+		hexdump_line(out, buf + offset, MIN(len - offset, 16));
+		srm_debug(level, client, "%s: %04x: %s\n", prefix, (int)offset, out);
+	}
 }
 
 void srm_debug(int level, struct srm_client *client, char *fmt, ...)
@@ -58,9 +85,9 @@ static void handle_srm_xfer(struct srm_client *client, struct srm_request_xfer *
 
 	if (len < (ssize_t)sizeof(*xfer))
 		return;
-	if (config.debug & SRM_DEBUG_PACKET_RX)
-		hexdump(xfer->data, len - sizeof(*xfer));
-	srm_handle_request(client, xfer->data, len - sizeof(*xfer));
+	hexdump(SRM_DEBUG_PACKET_RX, client, "RX",
+		xfer->data, len - sizeof(*xfer));
+	srm_handle_request(client, xfer->data, len - sizeof(*xfer) - 4);
 }
 
 void lansrm_send(struct srm_client *client, void *buf, size_t len)
@@ -74,8 +101,8 @@ void lansrm_send(struct srm_client *client, void *buf, size_t len)
 	memcpy(xfer->data, buf, len);
 
 	xfer->rec_type = htons(SRM_REPLY_XFER);
-	if (config.debug & SRM_DEBUG_PACKET_TX)
-		hexdump((uint8_t *)&tmp, len + sizeof(struct srm_request_xfer));
+	hexdump(SRM_DEBUG_PACKET_TX, client, "TX", tmp,
+		len + sizeof(struct srm_request_xfer));
 
 	if (sendto(client->fd, tmp, sizeof(struct srm_request_xfer) + len, 0,
 		   (struct sockaddr *)&client->addr, sizeof(struct sockaddr_in)) == -1)
@@ -273,8 +300,8 @@ error:
 static void handle_rx(int fd, GTree *clients, struct sockaddr_in *addr,
 		      socklen_t addrlen, void *buf, size_t len)
 {
+	struct srm_client *client = NULL;
 	char ipstr[INET_ADDRSTRLEN];
-	struct srm_client *client;
 
 	if (!inet_ntop(AF_INET, &addr->sin_addr.s_addr, ipstr, addrlen)) {
 		srm_debug(SRM_DEBUG_PACKET_RX, NULL, "%s: inet_ntop: %m\n", __func__);
@@ -324,7 +351,7 @@ static void handle_rx(int fd, GTree *clients, struct sockaddr_in *addr,
 		break;
 
 	default:
-		hexdump(buf, len);
+		hexdump(SRM_DEBUG_PACKET_RX, client, "UNKNOWN", buf, len);
 		break;
 	}
 }
