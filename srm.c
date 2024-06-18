@@ -7,6 +7,7 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <sys/types.h>
+#include <sys/vfs.h>
 #include <sys/stat.h>
 #include <netinet/in.h>
 #include <glib.h>
@@ -14,6 +15,7 @@
 #include <endian.h>
 #include "lansrm.h"
 #include "srm.h"
+
 
 static char *srm_to_c_string(char *s)
 {
@@ -43,6 +45,9 @@ static struct srm_volume *get_volume_by_name(struct srm_client *client, char *na
 
 static struct srm_volume *get_volume_by_index(struct srm_client *client, int index)
 {
+	if (!index)
+		index = 8;
+
 	for (GList *p = client->volumes; p; p = g_list_next(p)) {
 		struct srm_volume *volume = p->data;
 
@@ -318,7 +323,6 @@ static int get_file_info(char *filename, struct srm_file_info *fi)
 		fi->physical_size = htonl(srm_file_size(stbuf.st_size, hdr_offset) / 256);
 		break;
 	}
-
 	fi->max_file_size = htonl(-1);
 	fi->last_access.id = htons(stbuf.st_gid);
 	fi->creation_date.id = htons(stbuf.st_uid);
@@ -759,14 +763,22 @@ static int handle_srm_volstatus(struct srm_client *client,
 {
 	struct srm_volume *volume;
 	int error = SRM_ERRNO_NO_ERROR;
+	struct statfs statfsbuf;
+	unsigned long long bytesfree;
 
 	*responselen = sizeof(*response);
 	volume = srm_volume_from_vh(client, &request->vh, &error);
 	if (volume) {
-		c_string_to_srm(response->volname, volume->name);
-		response->exist = 1;
-		response->srmux = 1;
-		response->interleave = htonl(512);
+		if (statfs(volume->path, &statfsbuf) == -1) {
+			error = errno_to_srm_error(client);
+		} else {
+			c_string_to_srm(response->volname, volume->name);
+
+			response->exist = 1;
+			response->srmux = 1;
+			bytesfree = statfsbuf.f_bavail * statfsbuf.f_bsize;
+			response->freesize = htonl(MIN(INT_MAX, bytesfree));
+		}
 	}
 	srm_debug(SRM_DEBUG_REQUEST, client, "%s: VOLSTATUS vname='%s' error=%d\n",
 		  __func__, volume ? volume->name : "", error);

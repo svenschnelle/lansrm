@@ -283,7 +283,7 @@ struct srm_return_volume_status {
 	uint16_t __pad0;
 	uint8_t srmux;
 	uint8_t exist;
-	uint32_t interleave;
+	uint32_t freesize;
 	char volname[SRM_VOLNAME_LENGTH];
 } __packed;
 
