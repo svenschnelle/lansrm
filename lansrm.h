@@ -7,9 +7,8 @@
 #include <netinet/in.h>
 #include "srm.h"
 
-
-
 #define ARRAY_SIZE(x) (sizeof(x)/sizeof(x[0]))
+#define LIF_BLOCK_SIZE 256
 
 typedef enum {
 	SRM_DEBUG_REQUEST=1,

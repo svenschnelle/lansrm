@@ -90,6 +90,20 @@ typedef enum {
 } srm_filetype_t;
 
 typedef enum {
+	HP300_FILETYPE_UX = -5813,
+	HP300_FILETYPE_PIPE =-5812,
+	HP300_FILETYPE_BDEV = -5811,
+	HP300_FILETYPE_CDEV = -5810,
+	HP300_FILETYPE_MISC = -5809,
+	HP300_FILETYPE_BASIC_PROG = -5808,
+	HP300_FILETYPE_NET = -5806,
+	HP300_FILETYPE_SOCK = -5805,
+	HP300_FILETYPE_BDAT = -5791,
+	HP300_FILETYPE_BASIC_BIN = -5775,
+	HP300_FILETYPE_DIRECTORY = 3,
+} hp300_filetype_t;
+
+typedef enum {
 	SRM_OPENTYPE_RDWR=0,
 	SRM_OPENTYPE_RDONLY=1
 } srm_opentype_t;
@@ -126,7 +140,7 @@ struct srm_file_info {
 	char filename[16];			/* 0 */
 	uint32_t open_flag;			/* 16 */
 	uint32_t share_code;			/* 20 */
-	uint32_t file_code;			/* 24 */
+	int32_t file_code;			/* 24 */
 	uint32_t record_mode;			/* 28 */
 	uint32_t max_record_size;		/* 32 */
 	uint32_t max_file_size;			/* 36 */
@@ -215,7 +229,7 @@ struct srm_write {
 struct srm_create_file {
 	struct srm_volume_header vh;
 	struct srm_file_header fh;
-	uint32_t file_code;
+	int32_t file_code;
 	uint32_t record_mode;
 	int32_t max_record_size;
 	uint32_t first_extent;
@@ -300,7 +314,7 @@ struct srm_return_open {
 	uint32_t record_mode;
 	uint32_t max_record_size;
 	uint32_t max_file_size;
-	uint32_t file_code;
+	int32_t file_code;
 	uint32_t open_logical_eof;
 	uint32_t share_bits;
 	uint32_t sec_ext_size;
@@ -338,7 +352,7 @@ struct srm_return_fileinfo {
 
 struct lif_header {
 	char name[10];
-	uint16_t type;
+	int16_t type;
 	uint32_t loc;
 	uint32_t size;
 	uint16_t tim0;
@@ -373,9 +387,17 @@ struct hfs_header {
 	uint8_t field_0xfe[2];		/* 0xfe */
 } __packed;
 
+struct bdat_header {
+	uint32_t blocks;
+	uint32_t remainder;
+	uint32_t unknown;
+	uint32_t pad[61];
+};
+
 struct wshfs {
 	struct hfs_header hfs;
 	struct ws_lif_header lif;
+	struct bdat_header bdat;
 };
 
 struct srm_request_packet {

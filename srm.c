@@ -228,11 +228,12 @@ static int handle_srm_set_eof(struct srm_client *client,
 	return 0;
 }
 
-static int get_lif_info(int fd, uint32_t *out, uint16_t *gp, off_t *hdr_offset)
+static int get_lif_info(int fd, int32_t *out, uint16_t *gp, off_t *hdr_offset, int32_t *bdat_size)
 {
 	struct wshfs hdr;
 
 	*hdr_offset = 0;
+	*bdat_size = INT_MAX;
 
 	if (read(fd, &hdr.hfs, sizeof(hdr.hfs)) != sizeof(hdr.hfs))
 		return -1;
@@ -242,17 +243,23 @@ static int get_lif_info(int fd, uint32_t *out, uint16_t *gp, off_t *hdr_offset)
 		return -1;
 	}
 
-	if (lseek(fd, be32toh(hdr.hfs.lif_offset) * 256, SEEK_SET) == -1)
+	if (lseek(fd, be32toh(hdr.hfs.lif_offset) * LIF_BLOCK_SIZE, SEEK_SET) == -1)
 		return -1;
 
 	if (read(fd, &hdr.lif, sizeof(hdr.lif)) != sizeof(hdr.lif))
 		return -1;
 
-	*hdr_offset = be32toh(hdr.lif.lif.loc) * 256;
+	*hdr_offset = be32toh(hdr.lif.lif.loc) * LIF_BLOCK_SIZE;
 	*out = be16toh(hdr.lif.lif.type);
 	if (gp) {
 		gp[0] = hdr.lif.lif.gp[0];
 		gp[1] = hdr.lif.lif.gp[1];
+	}
+
+	if (bdat_size && *out == HP300_FILETYPE_BDAT) {
+		if (read(fd, &hdr.bdat, sizeof(hdr.bdat)) != sizeof(hdr.bdat))
+			return -1;
+		*bdat_size = be32toh(hdr.bdat.blocks) * 256 + be32toh(hdr.bdat.remainder);
 	}
 	return 0;
 }
@@ -291,10 +298,10 @@ static int get_file_info(char *filename, struct srm_file_info *fi)
 
 {
 	srm_filetype_t filetype;
-	uint32_t lif_type;
+	int32_t lif_type, bdat_size;
 	struct stat stbuf;
 	off_t hdr_offset;
-
+	uint16_t gp[2];
 	char *p;
 
 	if (lstat(filename, &stbuf) == -1)
@@ -302,9 +309,10 @@ static int get_file_info(char *filename, struct srm_file_info *fi)
 
 	fi->perm = htons(stbuf.st_mode & 0777);
 	filetype = srm_map_filetype(stbuf.st_mode);
+
 	switch (filetype) {
 	case SRM_FILETYPE_DIRECTORY:
-		fi->file_code = htonl(3);
+		fi->file_code = htonl(HP300_FILETYPE_DIRECTORY);
 		fi->record_mode = htonl(1);
 		fi->record_mode = htonl(1);
 		fi->share_code = htonl(1);
@@ -314,29 +322,46 @@ static int get_file_info(char *filename, struct srm_file_info *fi)
 		break;
 
 	case SRM_FILETYPE_CHARDEV:
+		fi->file_code = htonl(HP300_FILETYPE_CDEV);
+		break;
+
 	case SRM_FILETYPE_BLOCKDEV:
+		fi->file_code = htonl(HP300_FILETYPE_BDEV);
+		break;
+
 	case SRM_FILETYPE_PIPEFIFO:
+		fi->file_code = htonl(HP300_FILETYPE_PIPE);
+		break;
+
 	case SRM_FILETYPE_REMOTE_PROCESS:
 	case SRM_FILETYPE_UNKNOWN:
-		fi->record_mode = 0;
-		fi->file_code = htonl(0xffffe961);
+		fi->file_code = htonl(HP300_FILETYPE_MISC);
 		break;
 
 	case SRM_FILETYPE_REG_FILE:
-		fi->file_code = htonl(0xffffe94b);
+		fi->file_code = htonl(HP300_FILETYPE_UX);
 		int fd = open(filename, O_RDONLY);
 		if (fd == -1)
 			return -1;
-		if (get_lif_info(fd, &lif_type, NULL, &hdr_offset) == -1)
+		if (get_lif_info(fd, &lif_type, gp, &hdr_offset, &bdat_size) == -1)
 			break;
 		close(fd);
 		fi->file_code = htonl(lif_type);
-		fi->max_record_size = htonl(256);
+		fi->max_record_size = htonl(LIF_BLOCK_SIZE);
 		fi->logical_eof = htonl(srm_file_size(stbuf.st_size, hdr_offset));
-		fi->physical_size = htonl(srm_file_size(stbuf.st_size, hdr_offset) / 256);
+		fi->physical_size = htonl(srm_file_size(stbuf.st_size, hdr_offset));
+
+		if (lif_type == HP300_FILETYPE_BDAT) {
+			fi->max_record_size = gp[1] << 1;
+			if (!fi->max_record_size)
+				fi->max_record_size = 1;
+			if (bdat_size < (int32_t)ntohl(fi->logical_eof))
+				fi->logical_eof = htonl(bdat_size);
+		}
 		break;
 	}
-	fi->max_file_size = htonl(-1);
+
+	fi->max_file_size = htonl(INT_MAX);
 	fi->last_access.id = htons(stbuf.st_gid);
 	fi->creation_date.id = htons(stbuf.st_uid);
 	unix_to_srm_time(&fi->last_access, &stbuf.st_mtime, stbuf.st_gid);
@@ -509,13 +534,13 @@ static int handle_srm_open(struct srm_client *client,
 			   struct srm_return_open *response,
 			   int *responselen)
 {
+	srm_filetype_t filetype, opentype;
+	int32_t lif_type, bdat_size;
 	struct stat stbuf = { 0 };
 	int fd = -1, error = 0;
-	uint32_t lif_type = 0;
-	uint16_t gp[2];
 	off_t hdr_offset = 0;
 	GString *filename;
-	srm_filetype_t filetype, opentype;
+	uint16_t gp[2];
 
 	opentype = ntohl(request->open_type);
 	srm_debug(SRM_DEBUG_REQUEST, client, "%s: share_code %x, open_type: %x pad: %x %x %x\n", __func__,
@@ -550,14 +575,14 @@ static int handle_srm_open(struct srm_client *client,
 		}
 		response->file_code = ntohl(3);
 		response->record_mode = ntohl(1);
-		response->max_record_size = ntohl(256);
+		response->max_record_size = ntohl(LIF_BLOCK_SIZE);
 		break;
 
 	case SRM_FILETYPE_CHARDEV:
 	case SRM_FILETYPE_BLOCKDEV:
 	case SRM_FILETYPE_PIPEFIFO:
 	case SRM_FILETYPE_REG_FILE:
-		response->file_code = htonl(0xffffe94b);
+		response->file_code = htonl(HP300_FILETYPE_UX);
 		switch (ntohs(request->open_type)) {
 		case SRM_OPENTYPE_RDWR:
 			fd = open(filename->str, O_RDWR);
@@ -580,7 +605,7 @@ static int handle_srm_open(struct srm_client *client,
 		if (filetype != SRM_FILETYPE_REG_FILE)
 			break;
 
-		if (get_lif_info(fd, &lif_type, gp, &hdr_offset) == -1) {
+		if (get_lif_info(fd, &lif_type, gp, &hdr_offset, &bdat_size) == -1) {
 			error = errno_to_srm_error(client);
 			break;
 		}
@@ -593,21 +618,23 @@ static int handle_srm_open(struct srm_client *client,
 		response->gp[0] = gp[0];
 		response->gp[1] = gp[1];
 		response->file_code = htonl(lif_type);
-		response->open_logical_eof = htonl(stbuf.st_size > hdr_offset ? (stbuf.st_size - hdr_offset) : 0);
+		response->open_logical_eof = htonl(stbuf.st_size - hdr_offset);
+		response->sec_ext_size = htonl(stbuf.st_size - hdr_offset);
+		if (lif_type == HP300_FILETYPE_BDAT && bdat_size < (int32_t)ntohl(response->open_logical_eof))
+			response->open_logical_eof = htonl(bdat_size);
 		response->max_file_size = htonl(INT_MAX);
-		response->max_record_size = htonl(256);
+		response->max_record_size = htonl(LIF_BLOCK_SIZE);
 		break;
 
 	case SRM_FILETYPE_UNKNOWN:
 	case SRM_FILETYPE_REMOTE_PROCESS:
 		error = SRM_ERRNO_FILE_NOT_FOUND;
 		break;
+
 		response->record_mode = 0;
 		response->file_code = htonl(0xffffe94b);
 		break;
 	}
-	response->open_logical_eof = htonl(stbuf.st_size - hdr_offset);
-	response->sec_ext_size = htonl(stbuf.st_size - hdr_offset);
 	response->file_id = htonl(client_insert_file_entry(client, filename, fd, hdr_offset));
 error:
 	srm_debug(SRM_DEBUG_REQUEST, client, "%s: OPEN file='%s' fd=%d id=%08x hdrsz=%ld error=%d\n",
@@ -685,12 +712,23 @@ static int handle_srm_catalog(struct srm_client *client,
 		response->num_files = htonl(1);
 		break;
 	case SRM_FILETYPE_BLOCKDEV:
+		response->fi[0].file_code = htonl(HP300_FILETYPE_BDEV);
+		response->num_files = htonl(1);
+		break;
+
 	case SRM_FILETYPE_CHARDEV:
+		response->fi[0].file_code = htonl(HP300_FILETYPE_CDEV);
+		response->num_files = htonl(1);
+		break;
+
 	case SRM_FILETYPE_PIPEFIFO:
+		response->fi[0].file_code = htonl(HP300_FILETYPE_PIPE);
+		response->num_files = htonl(1);
+		break;
+
 	case SRM_FILETYPE_UNKNOWN:
 	case SRM_FILETYPE_REMOTE_PROCESS:
-		response->fi[0].file_code = htonl(0xffffe961);
-		response->fi[0].record_mode = 0;
+		response->fi[0].file_code = htonl(HP300_FILETYPE_MISC);
 		response->num_files = htonl(1);
 		break;
 	}
@@ -707,8 +745,9 @@ error:
 static int srm_write_hfslif_header(struct srm_create_file *request, int fd)
 {
 	struct wshfs hdr;
-	uint32_t type = ntohl(request->file_code);
+	int32_t type = ntohl(request->file_code);
 	int max_record_size = ntohl(request->max_record_size);
+	int first_extend = ntohl(request->first_extent);
 	ssize_t ret;
 
 	memset(&hdr, 0, sizeof(hdr));
@@ -733,20 +772,24 @@ static int srm_write_hfslif_header(struct srm_create_file *request, int fd)
 	hdr.lif.lif.tim2 = 0x2020;
 
 	switch (type) {
-	case 0xffffe961:
+	case HP300_FILETYPE_BDAT:
 		if (max_record_size < 1 || (max_record_size > 1 && (max_record_size & 1))) {
 			errno = EINVAL;
 			return -1;
 		}
 		hdr.lif.lif.gp[0] = request->gp[0];
-		hdr.lif.lif.gp[1] = max_record_size >> 1;
 		if ((max_record_size >> 1) < 0 && (max_record_size & 1))
-			hdr.lif.lif.gp[1]++;
+			hdr.lif.lif.gp[1] = htobe32(max_record_size / 2 + 1);
+		else
+			hdr.lif.lif.gp[1] = htobe32(max_record_size / 2);
+		first_extend += LIF_BLOCK_SIZE - 1;
+		first_extend &= ~LIF_BLOCK_SIZE;
+		hdr.lif.lif.size = htobe32(first_extend);
 		/* TODO: first extent logic */
 		break;
 
-	case 0xffffe950:
-	case 0xffffe971:
+	case HP300_FILETYPE_BASIC_BIN:
+	case HP300_FILETYPE_BASIC_PROG:
 		hdr.lif.lif.gp[0] = request->gp[0];
 		hdr.lif.lif.gp[1] = htobe16(0x80);
 		break;
