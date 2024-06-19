@@ -217,12 +217,12 @@ struct srm_create_file {
 	struct srm_file_header fh;
 	uint32_t file_code;
 	uint32_t record_mode;
-	uint32_t max_record_size;
+	int32_t max_record_size;
 	uint32_t first_extent;
 	uint32_t contiguous_first_extent;
 	uint32_t secondary_extent;
 	uint32_t max_file_size;
-	uint32_t boot_start_address;
+	uint16_t gp[2];
 	uint32_t num_protect_code_sets;
 	uint32_t label_included_flag;
 	struct srm_file_name_set filenames[0];
@@ -304,7 +304,7 @@ struct srm_return_open {
 	uint32_t open_logical_eof;
 	uint32_t share_bits;
 	uint32_t sec_ext_size;
-	uint32_t boot_start_address;
+	uint16_t gp[2];
 } __packed;
 
 struct srm_return_catalog {
@@ -345,8 +345,38 @@ struct lif_header {
 	uint16_t tim1;
 	uint16_t tim2;
 	uint16_t volnr;
-	uint32_t gp;
+	uint16_t gp[2];
 } __packed;
+
+struct ws_lif_header {
+	struct lif_header lif;
+	uint8_t pad[10];
+	uint16_t field_0x2a;
+	uint8_t field_0x2c[256 - 0x2c];
+} __packed;
+
+struct hfs_header {
+	uint16_t magic_8000;		/* 0x00 */
+	char hfslif[6];			/* 0x02 */
+	uint32_t lif_offset;		/* 0x08 */
+	uint16_t field_0x0c;		/* 0x0c */
+	uint8_t field_0x0e[2];		/* 0x0e */
+	uint32_t field_0x10;		/* 0x10 */
+	uint16_t field_0x14;		/* 0x14 */
+	uint16_t field_0x16;		/* 0x16 */
+	uint32_t field_0x18;		/* 0x18 */
+	uint32_t field_0x1c;		/* 0x1c */
+	uint32_t field_0x20;		/* 0x20 */
+	char magic_0x24[6];		/* 0x24 */
+	uint8_t unknown_0x2a[206];	/* 0x2a */
+	char magic_0xf8[6];		/* 0xf8 */
+	uint8_t field_0xfe[2];		/* 0xfe */
+} __packed;
+
+struct wshfs {
+	struct hfs_header hfs;
+	struct ws_lif_header lif;
+};
 
 struct srm_request_packet {
 	struct srm_send_header hdr;
@@ -357,6 +387,7 @@ struct srm_response_packet {
 	struct srm_return_header hdr;
 	uint8_t payload[2048];
 } __packed;
+
 
 struct srm_client;
 size_t srm_handle_request(struct srm_client *client,

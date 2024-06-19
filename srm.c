@@ -228,31 +228,32 @@ static int handle_srm_set_eof(struct srm_client *client,
 	return 0;
 }
 
-static int get_lif_info(int fd, uint32_t *out, uint32_t *bootaddr, off_t *hdr_offset)
+static int get_lif_info(int fd, uint32_t *out, uint16_t *gp, off_t *hdr_offset)
 {
-	struct lif_header hdr;
-	char buf[8];
+	struct wshfs hdr;
 
 	*hdr_offset = 0;
 
-	if (read(fd, buf, sizeof(buf)) != sizeof(buf))
+	if (read(fd, &hdr.hfs, sizeof(hdr.hfs)) != sizeof(hdr.hfs))
 		return -1;
 
-	if (!strncmp(buf+2, "HFSLIF", 6)) {
-		if (lseek(fd, 0x100, SEEK_SET) == -1)
-			return -1;
-		*hdr_offset = 0x1e0;
-	} else {
-		if (lseek(fd, 0, SEEK_SET) == -1)
-			return -1;
+	if (be16toh(hdr.hfs.magic_8000) != 0x8000) {
+		errno = EINVAL;
+		return -1;
 	}
 
-	if (read(fd, &hdr, sizeof(hdr)) != sizeof(hdr))
+	if (lseek(fd, be32toh(hdr.hfs.lif_offset) * 256, SEEK_SET) == -1)
 		return -1;
 
-	*hdr_offset += 0x20;
-	*out = 0xffff0000 | be16toh(hdr.type);
-	*bootaddr = ntohl(hdr.gp);
+	if (read(fd, &hdr.lif, sizeof(hdr.lif)) != sizeof(hdr.lif))
+		return -1;
+
+	*hdr_offset = be32toh(hdr.lif.lif.loc) * 256;
+	*out = be16toh(hdr.lif.lif.type);
+	if (gp) {
+		gp[0] = hdr.lif.lif.gp[0];
+		gp[1] = hdr.lif.lif.gp[1];
+	}
 	return 0;
 }
 
@@ -290,7 +291,6 @@ static int get_file_info(char *filename, struct srm_file_info *fi)
 
 {
 	srm_filetype_t filetype;
-	uint32_t bootaddr = 0;
 	uint32_t lif_type;
 	struct stat stbuf;
 	off_t hdr_offset;
@@ -327,7 +327,7 @@ static int get_file_info(char *filename, struct srm_file_info *fi)
 		int fd = open(filename, O_RDONLY);
 		if (fd == -1)
 			return -1;
-		if (get_lif_info(fd, &lif_type, &bootaddr, &hdr_offset) == -1)
+		if (get_lif_info(fd, &lif_type, NULL, &hdr_offset) == -1)
 			break;
 		close(fd);
 		fi->file_code = htonl(lif_type);
@@ -510,9 +510,9 @@ static int handle_srm_open(struct srm_client *client,
 			   int *responselen)
 {
 	struct stat stbuf = { 0 };
-	uint32_t bootaddr = 0;
 	int fd = -1, error = 0;
 	uint32_t lif_type = 0;
+	uint16_t gp[2];
 	off_t hdr_offset = 0;
 	GString *filename;
 	srm_filetype_t filetype, opentype;
@@ -580,15 +580,20 @@ static int handle_srm_open(struct srm_client *client,
 		if (filetype != SRM_FILETYPE_REG_FILE)
 			break;
 
-		get_lif_info(fd, &lif_type, &bootaddr, &hdr_offset);
+		if (get_lif_info(fd, &lif_type, gp, &hdr_offset) == -1) {
+			error = errno_to_srm_error(client);
+			break;
+		}
+
 		if (lseek(fd, stbuf.st_size, SEEK_SET) == -1) {
 			error = errno_to_srm_error(client);
 			break;
 		}
 
+		response->gp[0] = gp[0];
+		response->gp[1] = gp[1];
 		response->file_code = htonl(lif_type);
 		response->open_logical_eof = htonl(stbuf.st_size > hdr_offset ? (stbuf.st_size - hdr_offset) : 0);
-		response->boot_start_address = htonl(bootaddr);
 		response->max_file_size = htonl(INT_MAX);
 		response->max_record_size = htonl(256);
 		break;
@@ -699,10 +704,75 @@ error:
 	return error;
 }
 
+static int srm_write_hfslif_header(struct srm_create_file *request, int fd)
+{
+	struct wshfs hdr;
+	uint32_t type = ntohl(request->file_code);
+	int max_record_size = ntohl(request->max_record_size);
+	ssize_t ret;
+
+	memset(&hdr, 0, sizeof(hdr));
+
+	hdr.hfs.magic_8000 = htobe16(0x8000);
+	hdr.hfs.lif_offset = htobe32(1);
+	hdr.hfs.field_0x0c = htobe16(0x1000);
+	hdr.hfs.field_0x10 = htobe32(1);
+	hdr.hfs.field_0x18 = htobe32(1);
+	hdr.hfs.field_0x1c = htobe32(1);
+	hdr.hfs.field_0x20 = htobe32(3);
+	memcpy(hdr.hfs.hfslif, "HFSLIF", 6);
+	memset(hdr.hfs.magic_0x24, 0x11, sizeof(hdr.hfs.magic_0x24));
+	memset(hdr.hfs.magic_0xf8, 0x11, sizeof(hdr.hfs.magic_0xf8));
+	memcpy(hdr.lif.lif.name, "WS_FILE   ", 10);
+	hdr.lif.lif.type = htobe16(type & 0xffff);
+	hdr.lif.field_0x2a = 0xffff;
+	hdr.lif.lif.loc = htobe32(2);
+	hdr.lif.lif.volnr = htobe16(0x8001);
+	hdr.lif.lif.tim0 = 0x2020;
+	hdr.lif.lif.tim1 = 0x2020;
+	hdr.lif.lif.tim2 = 0x2020;
+
+	switch (type) {
+	case 0xffffe961:
+		if (max_record_size < 1 || (max_record_size > 1 && (max_record_size & 1))) {
+			errno = EINVAL;
+			return -1;
+		}
+		hdr.lif.lif.gp[0] = request->gp[0];
+		hdr.lif.lif.gp[1] = max_record_size >> 1;
+		if ((max_record_size >> 1) < 0 && (max_record_size & 1))
+			hdr.lif.lif.gp[1]++;
+		/* TODO: first extent logic */
+		break;
+
+	case 0xffffe950:
+	case 0xffffe971:
+		hdr.lif.lif.gp[0] = request->gp[0];
+		hdr.lif.lif.gp[1] = htobe16(0x80);
+		break;
+	case 1:
+		hdr.lif.lif.gp[0] = 0;
+		hdr.lif.lif.gp[1] = htobe16(0x80);
+		break;
+	default:
+		hdr.lif.lif.gp[0] = request->gp[0];
+		hdr.lif.lif.gp[1] = request->gp[1];
+		break;
+	}
+	ret = write(fd, &hdr, sizeof(hdr));
+	if (ret == -1)
+		return -1;
+	if (ret != sizeof(hdr)) {
+		errno = EIO;
+		return -1;
+	}
+	return 0;
+}
+
 static int handle_srm_createfile(struct srm_client *client,
 				 struct srm_create_file *request)
 {
-	int fd, type, error = 0;
+	int fd = -1, type, error = 0;
 	GString *filename;
 
 	type = ntohl(request->file_code);
@@ -719,14 +789,14 @@ static int handle_srm_createfile(struct srm_client *client,
 			error = errno_to_srm_error(client);
 			goto error;
 		}
-		struct lif_header buf = { 0 };
-		memcpy(buf.name, "WS_FILE   ", 10);
-		buf.type = htobe16(type & 0xffff);
-		buf.gp = htole32(request->boot_start_address);
-		if (write(fd, &buf, sizeof(buf)) == -1 || close(fd) == -1)
+		if (srm_write_hfslif_header(request, fd) == -1) {
 			error = errno_to_srm_error(client);
+			goto error;
+		}
 	}
 error:
+	if (fd != 1)
+		close(fd);
 	srm_debug(SRM_DEBUG_REQUEST, client, "%s: CREATE FILE: filename='%s' %08x\n", __func__, filename->str, type);
 	g_string_free(filename, TRUE);
 	return error;
