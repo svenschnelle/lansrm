@@ -16,6 +16,22 @@
 #include "lansrm.h"
 #include "srm.h"
 
+static int path_levels(char *pathname)
+{
+	int level = 0;
+
+	gchar **parts = g_strsplit(pathname, "/", 0);
+	for (int i = 0; parts[i]; i++) {
+		if (!strcmp(parts[i], "."))
+			continue;
+		if (!strcmp(parts[i], ".."))
+			level--;
+		else
+			level++;
+	}
+	g_strfreev(parts);
+	return level;
+}
 
 static char *srm_to_c_string(char *s)
 {
@@ -623,6 +639,12 @@ static GString *srm_get_filename(struct srm_client *client,
 		g_string_append_printf(ret, "/%s", filename->str);
 	g_string_free(filename, TRUE);
 	while(g_string_replace(ret, "//", "/", 0));
+	if (path_levels(ret->str) < path_levels(volume->path)) {
+		srm_debug(SRM_DEBUG_ERROR, client, "request outside of volume: %s\n", ret->str);
+		*error = SRM_ERRNO_FILE_PATHNAME_MISSING;
+		g_string_free(ret, TRUE);
+		return NULL;
+	}
 	return ret;
 }
 
