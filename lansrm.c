@@ -267,6 +267,7 @@ static struct srm_client *srm_new_client(GTree *clients, int fd, struct sockaddr
 					 struct srm_reply *reply)
 {
 	struct srm_client *client = g_new0(struct srm_client, 1);
+
 	memcpy(&client->addr, addr, addrlen);
 	if (srm_connect_fill_ip_node(reply, client, hwaddr_string) == -1) {
 		g_free(client);
@@ -329,8 +330,8 @@ error:
 static void handle_rx(int fd, GTree *clients, struct sockaddr_in *addr,
 		      socklen_t addrlen, void *buf, size_t len)
 {
-	struct srm_client *client = NULL;
 	struct lansrm_request_packet *packet = buf;
+	struct srm_client *client = NULL;
 	char ipstr[INET_ADDRSTRLEN];
 
 	if (!inet_ntop(AF_INET, &addr->sin_addr.s_addr, ipstr, addrlen)) {

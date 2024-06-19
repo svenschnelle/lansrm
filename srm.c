@@ -445,15 +445,19 @@ static int get_file_info(struct srm_client *client, struct srm_volume *volume,
 		return -1;
 
 	fi->perm = htons(stbuf.st_mode & 0777);
-	filetype = srm_map_filetype(stbuf.st_mode);
+	fi->open_flag = htonl(1);
+	fi->max_file_size = htonl(INT_MAX);
+	fi->share_code = -1;
+	fi->capabilities = -1;
 
+	filetype = srm_map_filetype(stbuf.st_mode);
 	switch (filetype) {
 	case SRM_FILETYPE_DIRECTORY:
 		fi->file_code = htonl(HP300_FILETYPE_DIRECTORY);
 		fi->record_mode = htonl(1);
 		fi->record_mode = htonl(1);
 		fi->share_code = htonl(1);
-		fi->max_record_size = htonl(1);
+		fi->max_record_size = htonl(256);
 		fi->logical_eof = htonl(1024);
 		fi->physical_size = htonl(1);
 		break;
@@ -519,23 +523,16 @@ static int handle_srm_fileinfo(struct srm_client *client,
 {
 	int id = ntohl(request->file_id);
 	struct open_file_entry *entry;
-	int error = SRM_ERRNO_NO_ERROR;
 
 	entry = find_file_entry(client, id);
 	if (!entry)
 		return SRM_ERRNO_INVALID_FILE_ID;
 
-	if (get_file_info(client, entry->volume, entry->filename->str, &response->fi))
+	if (get_file_info(client, entry->volume, entry->filename->str, &response->fi) == -1)
 		return errno_to_srm_error(client);
 
-	response->fi.open_flag = htonl(1);
-	response->fi.max_file_size = htonl(1024);
-	response->fi.max_record_size = htonl(1);
-	response->fi.share_code = -1;
-	response->fi.capabilities = -1;
-
-	srm_debug(SRM_DEBUG_REQUEST, client, "%s: FILEINFO id=%08x error=%d file=%s\n",
-		  __func__, id, error, entry ? entry->filename->str : "");
+	srm_debug(SRM_DEBUG_REQUEST, client, "%s: FILEINFO id=%08x file=%s\n",
+		  __func__, id, entry ? entry->filename->str : "");
 	*responselen = sizeof(struct srm_return_fileinfo);
 	return 0;
 }
@@ -859,6 +856,7 @@ static int handle_srm_catalog(struct srm_client *client,
 		g_list_free_full(names, free);
 		response->num_files = htonl(cnt);
 		break;
+
 	case SRM_FILETYPE_REG_FILE:
 		if (get_file_info(client, volume, filename->str, &response->fi[0]) == -1) {
 			error = SRM_ERRNO_VOLUME_IO_ERROR;
@@ -866,6 +864,7 @@ static int handle_srm_catalog(struct srm_client *client,
 		}
 		response->num_files = htonl(1);
 		break;
+
 	case SRM_FILETYPE_BLOCKDEV:
 		response->fi[0].file_code = htonl(HP300_FILETYPE_BDEV);
 		response->num_files = htonl(1);
