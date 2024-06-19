@@ -13,6 +13,8 @@
 #include <arpa/inet.h>
 #include <getopt.h>
 #include <syslog.h>
+#include <pwd.h>
+#include <grp.h>
 #include "lansrm.h"
 #include "srm.h"
 
@@ -175,6 +177,7 @@ static struct srm_volume *srm_read_volume(struct srm_client *client, char *name)
 {
 	struct srm_volume *ret;
 	GError *gerr = NULL;
+	char *umask, *endp;
 	int  index, fd;
 	char *path;
 	DIR *dir;
@@ -209,7 +212,24 @@ static struct srm_volume *srm_read_volume(struct srm_client *client, char *name)
 		g_free(path);
 		return NULL;
 	}
+
 	ret = g_new0(struct srm_volume, 1);
+
+	ret->uid = g_key_file_get_integer(config.keyfile, name, "uid", NULL);
+	ret->gid = g_key_file_get_integer(config.keyfile, name, "gid", NULL);
+	umask = g_key_file_get_string(config.keyfile, name, "umask", &gerr);
+	if (!umask) {
+		ret->umask = 022;
+		g_error_free(gerr);
+	} else {
+		endp = NULL;
+		ret->umask = strtoul(umask, &endp, 8);
+		if (*endp) {
+			srm_debug(SRM_DEBUG_ERROR, client, "failed to parse umask '%s' at '%s' in volume '%s' configuration\n",
+				  umask, endp, name);
+			ret->umask = 022;
+		}
+	}
 	ret->name = g_strdup(name);
 	ret->index = index;
 	ret->path = path;

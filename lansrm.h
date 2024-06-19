@@ -85,9 +85,14 @@ struct srm_volume {
 	int index;
 	DIR *dir;
 	int dirfd;
+	gid_t gid;
+	uid_t uid;
+	mode_t umask;
+	mode_t old_umask;
 };
 
 struct open_file_entry {
+	struct srm_volume *volume;
 	GString *filename;
 	off_t hdr_offset;
 	int client_fd;
