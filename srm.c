@@ -50,7 +50,7 @@ static void c_string_to_srm(char *d, char *s)
 
 static struct srm_volume *get_volume_by_name(struct srm_client *client, char *name)
 {
-	for (GList *p = client->volumes; p; p = g_list_next(p)) {
+	for (GList *p = client->config->volumes; p; p = g_list_next(p)) {
 		struct srm_volume *volume = p->data;
 
 		if (!strcmp(volume->name, name))
@@ -64,7 +64,7 @@ static struct srm_volume *get_volume_by_index(struct srm_client *client, int ind
 	if (!index)
 		index = 8;
 
-	for (GList *p = client->volumes; p; p = g_list_next(p)) {
+	for (GList *p = client->config->volumes; p; p = g_list_next(p)) {
 		struct srm_volume *volume = p->data;
 
 		if (volume->index == index)
@@ -547,8 +547,6 @@ static int handle_srm_close(struct srm_client *client,
 	if (!entry)
 		return SRM_ERRNO_INVALID_FILE_ID;
 
-	g_string_free(entry->filename, TRUE);
-	close(entry->fd);
 	g_tree_remove(client->files, &id);
 	srm_debug(SRM_DEBUG_REQUEST, client, "%s: CLOSE %08x\n", __func__, id);
 	return 0;

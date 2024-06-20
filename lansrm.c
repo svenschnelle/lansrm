@@ -7,6 +7,7 @@
 #include <netinet/udp.h>
 #include <netinet/in.h>
 #include <netinet/ether.h>
+#include <sys/signal.h>
 #include <errno.h>
 #include <sys/time.h>
 #include <glib.h>
@@ -19,6 +20,8 @@
 #include "srm.h"
 
 struct config config;
+
+static volatile sig_atomic_t shouldexit;
 
 static void hexdump_line(char *out, uint8_t *buf, size_t len)
 {
@@ -61,7 +64,7 @@ void srm_debug(int level, struct srm_client *client, char *fmt, ...)
 	GString *msg;
 	va_list ap;
 
-	if (!(config.debug & level))
+	if ((level != SRM_DEBUG_ERROR) && !(config.debug & level))
 		return;
 
 	msg = g_string_sized_new(128);
@@ -120,10 +123,11 @@ send:
 		srm_debug(SRM_DEBUG_ERROR, client, "sendto: %m\n");
 }
 
-static int lansrm_file_compare(const void *a, const void *b)
+static int lansrm_file_compare(const void *a, const void *b, void *data)
 {
 	const int *filea = a;
 	const int *fileb = b;
+	(void)data;
 
 	return *filea - *fileb;
 }
@@ -173,93 +177,53 @@ static int srm_connect_fill_ip_node(struct srm_reply *reply, struct srm_client *
 	return 0;
 }
 
-static struct srm_volume *srm_read_volume(struct srm_client *client, char *name)
+static struct client_config *srm_get_client_config(struct sockaddr_in *addr)
 {
-	struct srm_volume *ret;
-	GError *gerr = NULL;
-	char *umask, *endp;
-	int  index, fd;
-	char *path;
-	DIR *dir;
-
-	index = g_key_file_get_integer(config.keyfile, name, "volume", &gerr);
-	if (gerr) {
-		srm_debug(SRM_DEBUG_ERROR, client, "failed to fetch index for volume %s: %s\n",
-			  name, gerr->message);
-		g_error_free(gerr);
-		return NULL;
+	for (GList *p = config.configs; p; p = g_list_next(p)) {
+		struct client_config *c = p->data;
+		if (!memcmp(&c->addr.sin_addr.s_addr, &addr->sin_addr.s_addr,
+			    sizeof(addr->sin_addr.s_addr)))
+			return c;
 	}
-
-	path = g_key_file_get_string(config.keyfile, name, "path", &gerr);
-	if (!path) {
-		srm_debug(SRM_DEBUG_ERROR, client, "failed to fetch path for volume %s: %s\n",
-			  name, gerr->message);
-		g_error_free(gerr);
-		return NULL;
-	}
-
-	dir = opendir(path);
-	if (!dir) {
-		srm_debug(SRM_DEBUG_ERROR, client, "opendir %s failed while adding volume %s: %m\n", path, name);
-		g_free(path);
-		return NULL;
-	}
-
-	fd = dirfd(dir);
-	if (fd == -1) {
-		srm_debug(SRM_DEBUG_ERROR, client, "dirfd failed while adding volume %s: %m\n", name);
-		closedir(dir);
-		g_free(path);
-		return NULL;
-	}
-
-	ret = g_new0(struct srm_volume, 1);
-
-	ret->uid = g_key_file_get_integer(config.keyfile, name, "uid", NULL);
-	ret->gid = g_key_file_get_integer(config.keyfile, name, "gid", NULL);
-	umask = g_key_file_get_string(config.keyfile, name, "umask", &gerr);
-	if (!umask) {
-		ret->umask = 022;
-		g_error_free(gerr);
-	} else {
-		endp = NULL;
-		ret->umask = strtoul(umask, &endp, 8);
-		if (*endp) {
-			srm_debug(SRM_DEBUG_ERROR, client, "failed to parse umask '%s' at '%s' in volume '%s' configuration\n",
-				  umask, endp, name);
-			ret->umask = 022;
-		}
-	}
-	ret->name = g_strdup(name);
-	ret->index = index;
-	ret->path = path;
-	ret->dirfd = fd;
-	ret->dir = dir;
-	return ret;
+	return NULL;
 }
 
-static void srm_read_volumes(struct srm_client *client)
+static void srm_volume_free(struct srm_volume *volume)
 {
-	gchar *keys[] = { client->hostname, "global" };
-	struct srm_volume *vol;
-	gchar **volumes;
-	unsigned int i, j;
-	int ret = -1;
-	gsize volcount;
+	g_free(volume->fullpath);
+	g_free(volume->path);
+	g_free(volume->name);
+	if (volume->dir)
+		closedir(volume->dir);
+	g_free(volume);
+}
 
-	for (i = 0; ret == -1 && i < ARRAY_SIZE(keys); i++) {
-		volumes = g_key_file_get_string_list(config.keyfile, keys[i], "volumes", &volcount, NULL);
-		if (!volumes)
-			continue;
-		for(j = 0; j < volcount; j++) {
-			vol = srm_read_volume(client, volumes[j]);
-			if (!vol)
-				continue;
-			srm_debug(SRM_DEBUG_CONNECT, client, "adding volume %d: %s\n", vol->index, vol->name);
-				client->volumes = g_list_append(client->volumes, vol);
-		}
-		g_strfreev(volumes);
+static void srm_client_config_free(struct client_config *client)
+{
+	for (GList *p = client->volumes; p; p = g_list_next(p)) {
+		srm_volume_free(p->data);
 	}
+	g_list_free(client->volumes);
+	g_free(client);
+}
+
+static void srm_client_free(struct srm_client *client)
+{
+	if (!client)
+		return;
+	if (client->files)
+		g_tree_destroy(client->files);
+	g_free(client);
+}
+
+
+static void client_file_free(gpointer data)
+{
+	struct open_file_entry *entry = data;
+
+	g_string_free(entry->filename, TRUE);
+	close(entry->fd);
+	g_free(entry);
 }
 
 static struct srm_client *srm_new_client(GTree *clients, int fd, struct sockaddr_in *addr,
@@ -273,16 +237,41 @@ static struct srm_client *srm_new_client(GTree *clients, int fd, struct sockaddr
 		g_free(client);
 		return NULL;
 	}
-	client->files = g_tree_new(lansrm_file_compare);
+	client->files = g_tree_new_full(lansrm_file_compare, NULL, NULL, client_file_free);
 	client->fd = fd;
+	client->config = srm_get_client_config(&client->addr);
+	if (!client->config) {
+		srm_client_free(client);
+		return NULL;
+	}
 	g_tree_insert(clients, &client->addr, client);
 	return client;
 }
 
-static void srm_client_free(struct srm_client *client)
+static void srm_reject_client_xfer(struct srm_request_xfer *req, int fd,
+				   struct sockaddr_in *addr, socklen_t addrlen, char *name)
 {
-	g_tree_destroy(client->files);
-	g_free(client);
+	srm_debug(SRM_DEBUG_ERROR, NULL, "reject XFER from %s\n", name);
+	req->ret_code = htons(4);
+	req->rec_type = htons(SRM_REPLY_XFER);
+	if (sendto(fd, req, sizeof(struct srm_request_xfer), 0,
+		   (struct sockaddr *)addr, addrlen) == -1) {
+		srm_debug(SRM_DEBUG_ERROR, NULL, "sendto: %m\n");
+	}
+}
+
+static void srm_reject_client_connect(int fd, struct sockaddr_in *addr, socklen_t addrlen, char *name)
+{
+	struct srm_reply reply = { 0 };
+
+	srm_debug(SRM_DEBUG_ERROR, NULL, "reject CONNECT from %s\n", name);
+	reply.ret_code = htons(4);
+	reply.rec_type = htons(SRM_REPLY_CONNECT);
+
+	if (sendto(fd, &reply, sizeof(struct srm_reply), 0,
+		   (struct sockaddr *)addr, addrlen) == -1) {
+		srm_debug(SRM_DEBUG_ERROR, NULL, "sendto: %m\n");
+	}
 }
 
 static void handle_srm_connect(struct srm_request_connect *req, GTree *clients, int fd,
@@ -299,12 +288,15 @@ static void handle_srm_connect(struct srm_request_connect *req, GTree *clients, 
 		 hwaddr[0], hwaddr[1], hwaddr[2], hwaddr[3], hwaddr[4], hwaddr[5]);
 
 	client = srm_new_client(clients, fd, addr, addrlen, hwaddr_string, &reply);
-	srm_read_volumes(client);
 	srm_debug(SRM_DEBUG_CONNECT, client, "%s: code=%d, option=%d, node=%d, version=%d, station=%s host=%s\n",
 		  __func__, ntohs(req->ret_code), ntohs(req->option_code),
 		  ntohs(req->host_node), ntohs(req->version),
 		  hwaddr_string, ipstr);
 
+	if (!client) {
+		srm_reject_client_connect(fd, addr, addrlen, hwaddr_string);
+		return;
+	}
 	memcpy(reply.my_station, req->station, sizeof(reply.my_station));
 	reply.rec_type = htons(SRM_REPLY_CONNECT);
 	reply.ret_code = 0;
@@ -357,20 +349,16 @@ static void handle_rx(int fd, GTree *clients, struct sockaddr_in *addr,
 		if (!client) {
 			if (!g_key_file_get_boolean(config.keyfile, "global", "accept_unknown", NULL)) {
 				srm_debug(SRM_DEBUG_ERROR, client, "client without connect: %s\n", ipstr);
-				struct srm_request_xfer *req = buf;
-				req->ret_code = htons(4);
-				req->rec_type = htons(SRM_REPLY_XFER);
-				if (sendto(fd, req, sizeof(struct srm_request_xfer), 0,
-					   (struct sockaddr *)addr, addrlen) == -1) {
-					srm_debug(SRM_DEBUG_ERROR, client, "sendto: %m\n");
-				}
+				srm_reject_client_xfer(buf, fd, addr, addrlen, ipstr);
 				break;
-			} else {
-				client = srm_new_client(clients, fd, addr, addrlen, NULL, NULL);
-				client->hostname = g_strdup(ipstr);
-				srm_read_volumes(client);
-				memcpy(&client->addr, addr, sizeof(struct sockaddr_in));
 			}
+			client = srm_new_client(clients, fd, addr, addrlen, NULL, NULL);
+			if (!client) {
+				srm_reject_client_xfer(buf, fd, addr, addrlen, ipstr);
+				break;
+			}
+			client->hostname = g_strdup(ipstr);
+			memcpy(&client->addr, addr, sizeof(struct sockaddr_in));
 		}
 		handle_srm_xfer(client, packet, len);
 		break;
@@ -391,7 +379,7 @@ static int loop(GTree *clients, int fd)
 	struct timeval tval = { 0 };
 	fd_set rfds, wfds, efds;
 
-	for (;;) {
+	while(!shouldexit) {
 		FD_ZERO(&rfds);
 		FD_ZERO(&wfds);
 		FD_ZERO(&efds);
@@ -400,8 +388,10 @@ static int loop(GTree *clients, int fd)
 
 		tval.tv_sec = 1;
 		tval.tv_usec = 0;
+
 		if (select(fd+1, &rfds, &wfds, &efds, &tval) == -1) {
-			srm_debug(SRM_DEBUG_ERROR, NULL, "select failed: %m\n");
+			if (errno != EINTR)
+				srm_debug(SRM_DEBUG_ERROR, NULL, "select failed: %m\n");
 			return 1;
 		}
 
@@ -463,8 +453,10 @@ static int create_socket(char *dev)
 	return fd;
 }
 
-static int client_compare(const void *a, const void *b)
+static int client_compare(const void *a, const void *b, void *data)
 {
+	(void)data;
+
 	return memcmp(a, b, sizeof(struct sockaddr_in));
 }
 
@@ -495,6 +487,185 @@ static const struct option longopts[] = {
 	{ "help", no_argument, 0, 'h' }
 };
 
+static struct srm_volume *srm_read_volume(char *name, char *chrootpath)
+{
+	char *uid, *gid, *umask, *endp;
+	struct srm_volume *ret;
+	GError *gerr = NULL;
+	struct passwd *pwd;
+	struct group *grp;
+	int  index;
+
+	ret = g_new0(struct srm_volume, 1);
+
+	index = g_key_file_get_integer(config.keyfile, name, "volume", &gerr);
+	if (gerr) {
+		srm_debug(SRM_DEBUG_ERROR, NULL, "failed to fetch index for volume %s: %s\n",
+			  name, gerr->message);
+		goto error;
+	}
+
+	ret->path = g_key_file_get_string(config.keyfile, name, "path", &gerr);
+	if (!ret->path) {
+		srm_debug(SRM_DEBUG_ERROR, NULL, "failed to fetch path for volume %s: %s\n",
+			  name, gerr->message);
+		goto error;
+	}
+
+	GString *fullpath = g_string_sized_new(128);
+	g_string_printf(fullpath, "%s/%s", chrootpath ? chrootpath : "", ret->path);
+	ret->fullpath = g_string_free(fullpath, FALSE);
+
+	ret->dir = opendir(ret->fullpath);
+	if (!ret->dir) {
+		srm_debug(SRM_DEBUG_ERROR, NULL, "opendir %s failed while adding volume %s: %m\n", ret->path, name);
+		goto error;
+	}
+
+
+	ret->umask = 022;
+
+	ret->dirfd = dirfd(ret->dir);
+	if (ret->dirfd == -1) {
+		srm_debug(SRM_DEBUG_ERROR, NULL, "dirfd failed while adding volume %s: %m\n", name);
+		goto error;
+	}
+
+	uid = g_key_file_get_string(config.keyfile, name, "uid", NULL);
+	if (uid) {
+		pwd = getpwnam(uid);
+		if (pwd) {
+			ret->uid = pwd->pw_uid;
+			g_free(uid);
+		} else {
+			srm_debug(SRM_DEBUG_ERROR, NULL, "failed to resolve uid '%s', "
+				  "ignoring volume '%s'\n", uid, name);
+			g_free(uid);
+			goto error;
+		}
+	}
+
+	gid = g_key_file_get_string(config.keyfile, name, "gid", NULL);
+	if (gid) {
+		grp = getgrnam(gid);
+		if (grp) {
+			ret->gid = grp->gr_gid;
+			g_free(gid);
+		} else {
+			srm_debug(SRM_DEBUG_ERROR, NULL, "failed to resolve gid '%s', "
+				  "ignoring volume '%s'\n",
+				  gid, name);
+			g_free(gid);
+			goto error;
+		}
+	}
+
+	umask = g_key_file_get_string(config.keyfile, name, "umask", &gerr);
+	if (umask) {
+		ret->umask = strtoul(umask, &endp, 8);
+		if (*endp) {
+			srm_debug(SRM_DEBUG_ERROR, NULL, "failed to parse umask '%s' at '%s' in volume '%s' configuration\n",
+				  umask, endp, name);
+			g_free(umask);
+			goto error;
+		}
+		g_free(umask);
+	} else {
+		g_error_free(gerr);
+	}
+	ret->name = g_strdup(name);
+	ret->index = index;
+	return ret;
+error:
+	srm_volume_free(ret);
+	return NULL;
+}
+
+static GList *srm_read_volumes(const char *name)
+{
+	const gchar *keys[] = { name, "global" };
+	struct srm_volume *vol;
+	GList *ret = NULL;
+	unsigned int i, j;
+	gchar **volumes;
+	gsize volcount;
+
+	for (i = 0; i < ARRAY_SIZE(keys); i++) {
+		volumes = g_key_file_get_string_list(config.keyfile, keys[i],
+						     "volumes", &volcount, NULL);
+		if (!volumes)
+			continue;
+		for(j = 0; j < volcount; j++) {
+			vol = srm_read_volume(volumes[j], config.chroot);
+			if (!vol)
+				continue;
+			srm_debug(SRM_DEBUG_CONNECT, NULL, "adding %s volume %d: "
+				  "name='%s' path='%s' uid=%u gid=%u for client '%s'\n",
+				  i ? "global" : "local", vol->index, vol->name, vol->fullpath,
+				  vol->uid, vol->gid, name);
+			ret = g_list_append(ret, vol);
+		}
+		g_strfreev(volumes);
+	}
+	return ret;
+}
+
+static struct client_config *parse_client_config(const char *name)
+{
+	struct client_config *ret = g_new(struct client_config, 1);
+
+	ret->volumes = srm_read_volumes(name);
+	return ret;
+}
+
+static void read_client_configs(void)
+{
+	struct sockaddr_in addr;
+	struct client_config *client;
+	gchar **groups;
+
+	srm_debug(SRM_DEBUG_CONFIG, NULL, "parsing config\n");
+	groups = g_key_file_get_groups(config.keyfile, NULL);
+
+	for (int i = 0; groups[i]; i++) {
+		if (inet_pton(AF_INET, groups[i], &addr.sin_addr.s_addr) != 1)
+			continue;
+		client = parse_client_config(groups[i]);
+		if (client) {
+			memcpy(&client->addr, &addr, sizeof(addr));
+			config.configs = g_list_append(config.configs, client);
+		}
+	}
+	g_strfreev(groups);
+}
+
+static void sighandler(int sig)
+{
+	(void)sig;
+
+	shouldexit = 1;
+}
+
+static void config_free(struct config *c)
+{
+	g_key_file_free(c->keyfile);
+	g_free(c->chroot);
+	g_free(c->root);
+	g_free(c->interface);
+	for (GList *p = c->configs; p; p = g_list_next(p))
+		srm_client_config_free(p->data);
+	g_list_free(c->configs);
+}
+
+static void client_destroy(gpointer data)
+{
+	struct srm_client *client = data;
+
+	g_tree_destroy(client->files);
+	g_free(client->hostname);
+	g_free(client);
+}
+
 int main(int argc, char **argv)
 {
 	int ret, fd, longind = 0;
@@ -516,6 +687,7 @@ int main(int argc, char **argv)
 			break;
 		switch(c) {
 		case 'i':
+			g_free(config.interface);
 			config.interface = strdup(optarg);
 			break;
 		case 'd':
@@ -525,15 +697,29 @@ int main(int argc, char **argv)
 			config.foreground = 1;
 			break;
 		case 'c':
+			g_free(config.chroot);
 			config.chroot = strdup(optarg);
 			break;
 		case 'r':
+			g_free(config.root);
 			config.root = strdup(optarg);
 			break;
 		case 'h':
 			usage(argv[0]);
 			return 0;
 		}
+	}
+
+	read_client_configs();
+
+	if (signal(SIGTERM, sighandler) == SIG_ERR) {
+		perror("error registering SIGTERM handler\n");
+		return 1;
+	}
+
+	if (signal(SIGINT, sighandler) == SIG_ERR) {
+		perror("error registering SIGINT handler\n");
+		return 1;
 	}
 
 	if (!config.root)
@@ -544,18 +730,23 @@ int main(int argc, char **argv)
 		return 1;
 
 	if (!config.foreground && daemon(0, 0) == -1) {
-		fprintf(stderr, "daemon: %m\n");
+		perror("daemon");
 		return 1;
 	}
 
 	if (config.chroot && chroot(config.chroot) == -1) {
-		chdir("/");
-		fprintf(stderr, "chroot: %m\n");
+		perror("chroot: %m\n");
 		return 1;
 	}
-	clients = g_tree_new(client_compare);
+	if (chdir("/") == -1) {
+		perror("chdir");
+		return 1;
+	}
+	clients = g_tree_new_full(client_compare, NULL, NULL, client_destroy);
 
 	ret = loop(clients, fd);
+	g_tree_destroy(clients);
+	config_free(&config);
 	close(fd);
 	return ret;
 }

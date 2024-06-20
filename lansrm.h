@@ -18,7 +18,8 @@ typedef enum {
 	SRM_DEBUG_FILE=16,
 	SRM_DEBUG_PACKET_RX=32,
 	SRM_DEBUG_PACKET_TX=64,
-	SRM_DEBUG_ERROR=128
+	SRM_DEBUG_ERROR=128,
+	SRM_DEBUG_CONFIG=256,
 } srm_debug_level_t;
 
 typedef enum {
@@ -60,7 +61,14 @@ struct srm_request_xfer {
 	uint8_t sequence_no;
 } __packed;
 
+struct client_config {
+	struct sockaddr_in addr;
+	GList *volumes;
+	int node;
+};
+
 struct config {
+	GList *configs;
 	GKeyFile *keyfile;
 	char *interface;
 	char *chroot;
@@ -71,8 +79,8 @@ struct config {
 extern struct config config;
 
 struct srm_client {
+	struct client_config *config;
 	struct sockaddr_in addr;
-	GList *volumes;
 	GTree *files;
 	int debug_level;
 	char *hostname;
@@ -81,6 +89,7 @@ struct srm_client {
 
 struct srm_volume {
 	char *name;
+	char *fullpath;
 	char *path;
 	int index;
 	DIR *dir;
