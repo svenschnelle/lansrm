@@ -299,6 +299,10 @@ struct srm_set_eof {
 	uint32_t offset;
 };
 
+struct srm_reset {
+	uint32_t noclose;
+};
+
 struct srm_return_volume_status {
 	uint32_t status;
 	uint16_t __pad0;

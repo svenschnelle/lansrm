@@ -195,8 +195,7 @@ static int srm_volume_open_file(struct srm_client *client,
 
 static int handle_srm_reset(struct srm_client *client)
 {
-	(void)client;
-	// TODO: close files
+	client->cleanup = 1;
 	return 1;
 }
 
@@ -226,8 +225,10 @@ static int errno_to_srm_error(struct srm_client *client)
 		return SRM_ERRNO_FILE_NOT_FOUND;
 	case EIO:
 		return SRM_ERRNO_VOLUME_IO_ERROR;
+	case EINVAL:
+		return SRM_ERRNO_VOLUME_IO_ERROR;
 	default:
-		srm_debug(SRM_DEBUG_FILE, client, "%s: unhandled errno %d (%m)\n", __func__, errno);
+		srm_debug(SRM_DEBUG_ERROR, client, "%s: unhandled errno %d (%m)\n", __func__, errno);
 		return SRM_ERRNO_SOFTWARE_BUG;
 	}
 }
@@ -386,7 +387,7 @@ static int get_lif_info(int fd, int32_t *out, uint16_t *gp, off_t *hdr_offset, i
 		return -1;
 
 	*hdr_offset = be32toh(hdr.lif.lif.loc) * LIF_BLOCK_SIZE;
-	*out = be16toh(hdr.lif.lif.type);
+	*out = (int32_t)(int16_t)be16toh(hdr.lif.lif.type);
 	if (gp) {
 		gp[0] = hdr.lif.lif.gp[0];
 		gp[1] = hdr.lif.lif.gp[1];
@@ -445,7 +446,7 @@ static int get_file_info(struct srm_client *client, struct srm_volume *volume,
 		return -1;
 
 	fi->perm = htons(stbuf.st_mode & 0777);
-	fi->open_flag = htonl(1);
+	fi->open_flag = htonl(0);
 	fi->max_file_size = htonl(INT_MAX);
 	fi->share_code = -1;
 	fi->capabilities = -1;
@@ -454,7 +455,6 @@ static int get_file_info(struct srm_client *client, struct srm_volume *volume,
 	switch (filetype) {
 	case SRM_FILETYPE_DIRECTORY:
 		fi->file_code = htonl(HP300_FILETYPE_DIRECTORY);
-		fi->record_mode = htonl(1);
 		fi->record_mode = htonl(1);
 		fi->share_code = htonl(1);
 		fi->max_record_size = htonl(256);
@@ -781,7 +781,8 @@ static int handle_srm_open(struct srm_client *client,
 		response->file_code = htonl(0xffffe94b);
 		break;
 	}
-	response->file_id = htonl(client_insert_file_entry(client, volume, filename, fd, hdr_offset));
+	if (!error)
+		response->file_id = htonl(client_insert_file_entry(client, volume, filename, fd, hdr_offset));
 error:
 	srm_debug(SRM_DEBUG_REQUEST, client, "%s: OPEN file='%s' fd=%d id=%08x hdrsz=%ld error=%d\n",
 		  __func__, filename ? filename->str : "", fd, ntohl(response->file_id), hdr_offset, error);
@@ -994,7 +995,7 @@ static int handle_srm_createfile(struct srm_client *client,
 		}
 	}
 error:
-	if (fd != 1)
+	if (fd != -1)
 		close(fd);
 	srm_debug(SRM_DEBUG_REQUEST, client, "%s: CREATE FILE: filename='%s' %08x\n", __func__, filename->str, type);
 	g_string_free(filename, TRUE);
