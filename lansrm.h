@@ -20,6 +20,7 @@ typedef enum {
 	SRM_DEBUG_PACKET_TX=64,
 	SRM_DEBUG_ERROR=128,
 	SRM_DEBUG_CONFIG=256,
+	SRM_DEBUG_EPOLL=512,
 } srm_debug_level_t;
 
 typedef enum {
@@ -29,7 +30,7 @@ typedef enum {
 	SRM_REPLY_XFER = 130
 } lansrm_request_t;
 
-struct srm_request_connect {
+struct srm_connect_request {
 	uint16_t rec_type;
 	uint16_t ret_code;
 	uint16_t option_code;
@@ -38,7 +39,7 @@ struct srm_request_connect {
 	uint8_t station[6];
 } __packed;
 
-struct srm_reply {
+struct srm_connect_reply {
 	uint16_t rec_type;
 	uint16_t ret_code;
 	uint32_t host_ip;
@@ -51,7 +52,7 @@ struct srm_reply {
 	uint8_t host_flag;
 } __packed;
 
-struct srm_request_xfer {
+struct srm_transfer {
 	uint16_t rec_type;
 	uint16_t ret_code;
 	uint16_t session_id;
@@ -82,9 +83,11 @@ struct srm_client {
 	struct client_config *config;
 	struct sockaddr_in addr;
 	GTree *files;
-	int debug_level;
 	char *hostname;
+	int debug_level;
+	int cleanup;
 	int fd;
+
 };
 
 struct srm_volume {
@@ -110,12 +113,12 @@ struct open_file_entry {
 };
 
 struct lansrm_response_packet {
-	struct srm_request_xfer xfer;
+	struct srm_transfer xfer;
 	struct srm_response_packet srm;
 } __packed;
 
 struct lansrm_request_packet {
-	struct srm_request_xfer xfer;
+	struct srm_transfer xfer;
 	struct srm_request_packet srm;
 } __packed;
 
