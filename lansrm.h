@@ -8,20 +8,8 @@
 #include "srm.h"
 
 #define ARRAY_SIZE(x) (sizeof(x)/sizeof(x[0]))
-#define LIF_BLOCK_SIZE 256
 
-typedef enum {
-	SRM_DEBUG_REQUEST=1,
-	SRM_DEBUG_RESPONSE=2,
-	SRM_DEBUG_CONNECT=4,
-	SRM_DEBUG_XFER=8,
-	SRM_DEBUG_FILE=16,
-	SRM_DEBUG_PACKET_RX=32,
-	SRM_DEBUG_PACKET_TX=64,
-	SRM_DEBUG_ERROR=128,
-	SRM_DEBUG_CONFIG=256,
-	SRM_DEBUG_EPOLL=512,
-} srm_debug_level_t;
+#define LIF_BLOCK_SIZE 256
 
 typedef enum {
 	SRM_REQUEST_CONNECT = 1,
@@ -65,42 +53,21 @@ struct srm_transfer {
 struct client_config {
 	struct sockaddr_in addr;
 	GList *volumes;
+	gchar **bootfiles;
+	char *bootpath;
+	int bootfilefd;
 	int node;
 };
-
-struct config {
-	GList *configs;
-	GKeyFile *keyfile;
-	char *interface;
-	char *chroot;
-	char *root;
-	int foreground;
-	int debug;
-};
-extern struct config config;
 
 struct srm_client {
 	struct client_config *config;
 	struct sockaddr_in addr;
 	GTree *files;
-	char *hostname;
+	char *ipstr;
 	int debug_level;
 	int cleanup;
 	int fd;
 
-};
-
-struct srm_volume {
-	char *name;
-	char *fullpath;
-	char *path;
-	int index;
-	DIR *dir;
-	int dirfd;
-	gid_t gid;
-	uid_t uid;
-	mode_t umask;
-	mode_t old_umask;
 };
 
 struct open_file_entry {
@@ -121,7 +88,5 @@ struct lansrm_request_packet {
 	struct srm_transfer xfer;
 	struct srm_request_packet srm;
 } __packed;
-
-void srm_debug(int level, struct srm_client *client, char *fmt, ...) __attribute__ ((format (printf, 3, 4)));
 
 #endif
