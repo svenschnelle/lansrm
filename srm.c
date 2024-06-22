@@ -141,6 +141,20 @@ static int srm_volume_lstat(struct srm_client *client,
 	return ret;
 }
 
+static int srm_volume_fstat(struct srm_client *client,
+			    struct srm_volume *volume,
+			    int fd, struct stat *out)
+{
+	int ret;
+
+	if (srm_drop_privs(client, volume) == -1)
+		return -1;
+	ret = fstat(fd, out);
+	if (srm_restore_privs(client, volume) == -1)
+		return -1;
+	return ret;
+}
+
 static int srm_volume_mkdir(struct srm_client *client,
 			    struct srm_volume *volume,
 			    const char *filename)
@@ -266,6 +280,7 @@ static int handle_srm_write(struct srm_client *client,
 	uint32_t offset,requested, id, acc;
 	struct open_file_entry *entry;
 	ssize_t len = 0;
+	off_t curpos;
 
 	*responselen = sizeof(struct srm_return_write);
 
@@ -278,9 +293,11 @@ static int handle_srm_write(struct srm_client *client,
 	if (!entry)
 		return SRM_ERRNO_FILE_UNOPENED;
 
-	if ((acc == 0 && lseek(entry->fd, offset + entry->hdr_offset, SEEK_SET) == -1))
-		return errno_to_srm_error(client);
-
+	if (acc == 0) {
+		curpos = lseek(entry->fd, offset + entry->hdr_offset, SEEK_SET);
+		if (curpos == -1)
+			return errno_to_srm_error(client);
+	}
 	len = write(entry->fd, request->data, requested);
 	if (len == -1)
 		return errno_to_srm_error(client);
@@ -297,6 +314,7 @@ static int handle_srm_position(struct srm_client *client,
 	struct open_file_entry *entry;
 	uint32_t id, offset;
 	uint8_t whence;
+	off_t curpos;
 
 	offset = ntohl(request->offset);
 	whence = request->position_type ? SEEK_CUR : SEEK_SET;
@@ -309,7 +327,8 @@ static int handle_srm_position(struct srm_client *client,
 	if (whence == SEEK_SET)
 		offset += entry->hdr_offset;
 
-	if (lseek(entry->fd, offset, whence) == -1)
+	curpos = lseek(entry->fd, offset, whence);
+	if (curpos == -1)
 		return errno_to_srm_error(client);
 
 	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: POSITION id=%x offset=%x, whence=%d\n",
@@ -326,6 +345,7 @@ static int handle_srm_read(struct srm_client *client,
 	uint32_t requested, offset, id, acc;
 	struct open_file_entry *entry;
 	ssize_t len = 0;
+	off_t curpos;
 
 	requested = ntohl(request->requested);
 	offset = ntohl(request->offset);
@@ -336,8 +356,11 @@ static int handle_srm_read(struct srm_client *client,
 	if (!entry)
 		return SRM_ERRNO_FILE_UNOPENED;
 
-	if (acc == 0 && lseek(entry->fd, offset + entry->hdr_offset, SEEK_SET) == -1)
-		return errno_to_srm_error(client);
+	if (acc == 0) {
+		curpos = lseek(entry->fd, offset + entry->hdr_offset, SEEK_SET);
+		if (curpos == -1)
+			return errno_to_srm_error(client);
+	}
 
 	if (requested > 512)
 		requested = 512;
@@ -356,6 +379,72 @@ static int handle_srm_read(struct srm_client *client,
 		  __func__, entry ? entry->client_fd : 0,
 		  requested, len, offset, acc, entry->hdr_offset);
 	return len != requested ? SRM_ERRNO_EOF_ENCOUNTERED : 0;
+}
+
+
+static int srm_update_file_header(struct srm_client *client,
+				  struct open_file_entry *entry)
+{
+	struct wshfs hdr;
+	off_t lif_offset;
+	struct stat statbuf;
+	int error = 0;
+	ssize_t ret;
+
+	ret = srm_volume_fstat(client, entry->volume, entry->fd, &statbuf);
+	if (ret == -1) {
+		error = errno_to_srm_error(client);
+		return -1;
+	}
+	ret = lseek(entry->fd, 0, SEEK_SET);
+	if (ret == -1) {
+		error = errno_to_srm_error(client);
+		return -1;
+	}
+
+	ret = read(entry->fd, &hdr.hfs, sizeof(hdr.hfs));
+	if (ret == -1) {
+		error = errno_to_srm_error(client);
+		return -1;
+	}
+
+	if (ret != sizeof(hdr.hfs)) {
+		error = SRM_ERRNO_VOLUME_IO_ERROR;
+		return -1;
+	}
+
+	lif_offset = be32toh(hdr.hfs.lif_offset) << 8;
+	ret = lseek(entry->fd, lif_offset, SEEK_SET);
+	if (ret == -1 || ret != lif_offset) {
+		error = errno_to_srm_error(client);
+		return -1;
+	}
+
+	ret = read(entry->fd, &hdr.lif, sizeof(hdr.lif));
+	if (ret == -1) {
+		error = errno_to_srm_error(client);
+		return -1;
+	}
+
+	if (ret != sizeof(hdr.lif)) {
+		error = SRM_ERRNO_VOLUME_IO_ERROR;
+		return -1;
+	}
+
+	ret = lseek(entry->fd, lif_offset, SEEK_SET);
+	if (ret == -1 || ret != lif_offset) {
+		error = errno_to_srm_error(client);
+		return -1;
+	}
+
+	hdr.lif.lif.size = htobe32((statbuf.st_size - entry->hdr_offset) / LIF_BLOCK_SIZE);
+
+	ret = write(entry->fd, &hdr.lif, sizeof(hdr.lif));
+	if (ret == -1) {
+		error = errno_to_srm_error(client);
+		return -1;
+	}
+	return error;
 }
 
 static int handle_srm_set_eof(struct srm_client *client,
@@ -380,6 +469,7 @@ static int handle_srm_set_eof(struct srm_client *client,
 		return errno_to_srm_error(client);
 	if (ftruncate(entry->fd, pos) == -1)
 		return errno_to_srm_error(client);
+	srm_update_file_header(client, entry);
 	srm_debug(SRM_DEBUG_FILE, client->ipstr, "%s: SET EOF: relative=%d pos=%08lx\n", __func__,
 		  whence, pos + 1);
 	return 0;
@@ -562,14 +652,16 @@ static int handle_srm_close(struct srm_client *client,
 {
 	int id = ntohl(request->file_id);
 	struct open_file_entry *entry;
+	int error;
 
 	entry = find_file_entry(client, id);
 	if (!entry)
 		return SRM_ERRNO_INVALID_FILE_ID;
 
+	error = srm_update_file_header(client, entry);
 	g_tree_remove(client->files, &id);
-	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: CLOSE %08x\n", __func__, id);
-	return 0;
+	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: CLOSE %08x error %d\n", __func__, id, error);
+	return error;
 }
 
 static GString *srm_filename_from_fh(struct srm_file_header *fh,
@@ -1619,8 +1711,8 @@ static void handle_srm_connect(struct srm_epoll_ctx *ctx, char *ipstr,
 	memcpy(reply->my_station, req->station, sizeof(reply->my_station));
 	reply->rec_type = htons(SRM_REPLY_CONNECT);
 	reply->ret_code = 0;
-	reply->host_flag = 0;
-	reply->version = htons(11);
+	reply->host_flag = 1;
+	reply->version = htons(10);
 
 	ctx->outlen = sizeof(*reply);
 	srm_send(client, ctx, NULL);

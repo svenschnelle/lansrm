@@ -77,6 +77,7 @@ struct open_file_entry {
 	int client_fd;
 	int fd;
 	int cwd;
+
 };
 
 struct lansrm_response_packet {
