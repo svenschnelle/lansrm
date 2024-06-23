@@ -303,6 +303,14 @@ struct srm_reset {
 	uint32_t noclose;
 };
 
+struct srm_copy_file {
+	uint32_t file_id1;
+	uint32_t offset1;
+	uint32_t file_id2;
+	uint32_t offset2;
+	uint32_t requested;
+};
+
 struct srm_return_volume_status {
 	uint32_t status;
 	uint16_t __pad0;

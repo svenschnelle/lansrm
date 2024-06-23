@@ -9,6 +9,7 @@
 #include <sys/types.h>
 #include <sys/vfs.h>
 #include <sys/stat.h>
+#include <sys/sendfile.h>
 #include <netinet/in.h>
 #include <netinet/udp.h>
 #include <arpa/inet.h>
@@ -1237,6 +1238,45 @@ static int handle_srm_xchg_open(struct srm_client *client,
 	return SRM_ERRNO_VOLUME_IO_ERROR;
 }
 
+static int handle_srm_copy_file(struct srm_client *client,
+				struct srm_copy_file *request)
+{
+	uint32_t offset1, offset2, file_id1, file_id2, requested;
+	struct open_file_entry *entry1, *entry2;
+	ssize_t ret;
+
+	offset1 = ntohl(request->offset1);
+	offset2 = ntohl(request->offset2);
+	file_id1 = ntohl(request->file_id1);
+	file_id2 = ntohl(request->file_id2);
+	requested = ntohl(request->requested);
+
+	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: COPY FILE %x(%d,%d) -> %x(%d)\n",
+		  __func__, file_id1, offset1, requested, file_id2, offset2);
+
+	entry1 = find_file_entry(client, file_id1);
+	if (!entry1)
+		return SRM_ERRNO_INVALID_FILE_ID;
+
+	entry2 = find_file_entry(client, file_id2);
+	if (!entry2)
+		return SRM_ERRNO_INVALID_FILE_ID;
+
+	if (lseek(entry1->fd, offset1, SEEK_SET) == -1)
+		return SRM_ERRNO_VOLUME_IO_ERROR;
+
+	if (lseek(entry2->fd, offset2, SEEK_SET) == -1)
+		return SRM_ERRNO_VOLUME_IO_ERROR;
+
+	do {
+		ret = sendfile(entry2->fd, entry1->fd, NULL, requested);
+		if (ret == -1)
+			return SRM_ERRNO_VOLUME_IO_ERROR;
+		requested -= ret;
+	} while (requested > 0);
+	return 0;
+}
+
 static char *srm_request_to_name(srm_request_t type)
 {
 	switch(type)
@@ -1476,6 +1516,9 @@ size_t srm_handle_request(struct srm_client *client,
 		ret = handle_srm_xchg_open(client, (void *)request->payload);
 		break;
 
+	case SRM_REQ_COPY_FILE:
+		ret = handle_srm_copy_file(client, (void *)request->payload);
+		break;
 	default:
 		srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: unknown request %d\n",
 			__func__, ntohl(request->hdr.request_type));
