@@ -12,6 +12,7 @@
 #include <sys/sendfile.h>
 #include <netinet/in.h>
 #include <netinet/udp.h>
+#include <netinet/if_ether.h>
 #include <arpa/inet.h>
 #include <glib.h>
 #include <stdarg.h>
@@ -1579,7 +1580,7 @@ size_t srm_handle_request(struct srm_client *client,
 		ret = handle_srm_copy_file(client, (void *)request->payload);
 		break;
 	default:
-		srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: unknown request %d\n",
+		srm_debug(SRM_DEBUG_ERROR, client->ipstr, "%s: unknown request %d\n",
 			__func__, ntohl(request->hdr.request_type));
 		break;
 	}
@@ -1602,11 +1603,11 @@ size_t srm_handle_request(struct srm_client *client,
 static int srm_send(struct srm_client *client, struct srm_epoll_ctx *ctx, struct sockaddr_in *addr)
 {
 	ssize_t ret;
-
+	char *ipstr = client ? client->ipstr : "";
 	if (!addr)
 		addr = &bcaddr;
 
-	srm_debug(SRM_DEBUG_RESPONSE, client->ipstr, "sending %zd bytes\n", ctx->outlen);
+	srm_debug(SRM_DEBUG_RESPONSE, ipstr, "sending %zd bytes\n", ctx->outlen);
 	ret = sendto(ctx->fd, ctx->outbuf, ctx->outlen, 0,
 		     (struct sockaddr *)addr, sizeof(*addr));
 	if (ret == -1) {
@@ -1623,7 +1624,7 @@ static int srm_send(struct srm_client *client, struct srm_epoll_ctx *ctx, struct
 	}
 
 	if (ret != ctx->outlen) {
-		srm_debug(SRM_DEBUG_ERROR, client->ipstr, "sendto: only wrote %zd out of %zd bytes\n",
+		srm_debug(SRM_DEBUG_ERROR, ipstr, "sendto: only wrote %zd out of %zd bytes\n",
 			  ret, ctx->outlen);
 		return -1;
 	}
@@ -1788,11 +1789,11 @@ static void srm_reject_client_connect(struct srm_epoll_ctx *ctx, char *name,
 	struct srm_connect_reply *reply = ctx->outbuf;
 
 	srm_debug(SRM_DEBUG_ERROR, NULL, "reject CONNECT from %s\n", name);
-	memcpy(reply, request, sizeof(*reply));
+	memcpy(reply->my_station, request->station, ETH_ALEN);
 	reply->ret_code = htons(4);
 	reply->rec_type = htons(SRM_REPLY_CONNECT);
 	ctx->outlen = sizeof(*reply);
-	srm_send(NULL, ctx, addr);
+	srm_send(NULL, ctx, NULL);
 }
 
 static void handle_srm_connect(struct srm_epoll_ctx *ctx, char *ipstr,
