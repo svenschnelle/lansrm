@@ -1261,7 +1261,7 @@ static int handle_srm_change_protect(struct srm_client *client)
 {
 
 	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: CHANGE PROTECT\n", __func__);
-	return SRM_ERRNO_VOLUME_IO_ERROR;
+	return 0;
 }
 
 static int handle_srm_xchg_open(struct srm_client *client,
