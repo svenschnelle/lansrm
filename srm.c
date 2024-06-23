@@ -740,7 +740,7 @@ static GString *srm_get_filename(struct srm_client *client,
 		entry = g_tree_lookup(client->files, &wd);
 		if (!entry) {
 			*error = SRM_ERRNO_INVALID_FILE_ID;
-			return NULL;
+			goto error;
 		}
 		g_string_append_printf(ret, "/%s", entry->filename->str);
 	} else {
@@ -755,10 +755,12 @@ static GString *srm_get_filename(struct srm_client *client,
 	if (path_levels(ret->str) < path_levels(volume->path)) {
 		srm_debug(SRM_DEBUG_ERROR, client->ipstr, "request outside of volume: %s\n", ret->str);
 		*error = SRM_ERRNO_FILE_PATHNAME_MISSING;
-		g_string_free(ret, TRUE);
-		return NULL;
+		goto error;
 	}
 	return ret;
+error:
+	g_string_free(ret, TRUE);
+	return NULL;
 }
 
 static int client_insert_file_entry(struct srm_client *client,
