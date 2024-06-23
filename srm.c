@@ -23,6 +23,8 @@
 #include "debug.h"
 #include "config.h"
 
+#define MAYBE_NULL(p, member) ((p) ? (p)->member : "")
+
 static struct sockaddr_in bcaddr;
 static struct srm_epoll_ctx *srmctx;
 static GTree *open_files;
@@ -385,9 +387,9 @@ static int handle_srm_read(struct srm_client *client,
 
 	*responselen = offsetof(struct srm_return_read, data) + len;
 
-	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: READ file id=%x size=%d "
+	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: READ id=%x file='%s:%s' size=%d "
 		  "actual=%zd offset=%x accesscode=%d, hdr_offset=%zx\n",
-		  __func__, entry ? entry->client_fd : 0,
+		  __func__, id, MAYBE_NULL(entry, volume->name), MAYBE_NULL(entry, filename->str),
 		  requested, len, offset, acc, entry->hdr_offset);
 	return len != requested ? SRM_ERRNO_EOF_ENCOUNTERED : 0;
 }
@@ -658,8 +660,8 @@ static int handle_srm_fileinfo(struct srm_client *client,
 	if (get_file_info(client, entry->volume, entry->filename->str, &response->fi) == -1)
 		return errno_to_srm_error(client);
 
-	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: FILEINFO id=%08x file=%s\n",
-		  __func__, id, entry ? entry->filename->str : "");
+	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: FILEINFO id=%08x file='%s:%s'\n",
+		  __func__, id, MAYBE_NULL(entry, volume->name), MAYBE_NULL(entry, filename->str));
 	*responselen = sizeof(struct srm_return_fileinfo);
 	return 0;
 }
@@ -683,9 +685,10 @@ static int handle_srm_close(struct srm_client *client,
 		if (srm_volume_unlink_file(client, entry->volume, entry->filename->str) == -1)
 			error = errno_to_srm_error(client);
 	}
+	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: CLOSE %08x file='%s:%s' nodeallocate %d error %d\n",
+		  __func__, id, MAYBE_NULL(entry, volume->name), MAYBE_NULL(entry, filename->str), nodeallocate, error);
 	g_tree_remove(open_files, entry->filename);
 	g_tree_remove(client->files, &id);
-	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: CLOSE %08x nodeallocate %d error %d\n", __func__, id, nodeallocate, error);
 	return error;
 }
 
@@ -718,9 +721,6 @@ static struct srm_volume *srm_volume_from_vh(struct srm_client *client,
 	driver = srm_to_c_string(vh->driver_name);
 	cat = srm_to_c_string(vh->catalogue_organization);
 	name = srm_to_c_string(vh->volume_name);
-
-	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: present=%d, addr=%d, name='%s' driver='%s' cat='%s'\n", __func__,
-		  present, addr, name, driver, cat);
 
 	if (!present) {
 		volume = get_volume_by_name(client, name);
@@ -832,10 +832,6 @@ static int handle_srm_open(struct srm_client *client,
 
 	opentype = ntohl(request->open_type);
 
-	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: share_code %x, open_type: %x pad: %x %x %x\n", __func__,
-		  ntohl(request->share_code), opentype,
-		  ntohl(request->__pad0), ntohl(request->__pad1), ntohl(request->__pad2));
-
 	volume = srm_volume_from_vh(client, &request->vh, &errno);
 	if (!volume) {
 		error = SRM_ERRNO_VOLUME_NOT_FOUND;
@@ -934,8 +930,9 @@ static int handle_srm_open(struct srm_client *client,
 	if (!error)
 		response->file_id = htonl(client_insert_file_entry(client, volume, filename, fd, hdr_offset, filetype));
 error:
-	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: OPEN file='%s' fd=%d id=%08x hdrsz=%ld error=%d\n",
-		  __func__, filename ? filename->str : "", fd, ntohl(response->file_id), hdr_offset, error);
+	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: OPEN file='%s:%s' fd=%d id=%08x hdrsz=%ld error=%d\n",
+		  __func__, MAYBE_NULL(volume, name), MAYBE_NULL(filename, str), fd,
+		  ntohl(response->file_id), hdr_offset, error);
 	if (filename && error)
 		g_string_free(filename, TRUE);
 	*responselen = sizeof(*response);
@@ -1036,8 +1033,9 @@ static int handle_srm_catalog(struct srm_client *client,
 		break;
 	}
 error:
-	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: CAT '%s' start=%d max=%d wd=%x results=%d error=%d\n",
-		  __func__, filename ? filename->str : "", start, max, ntohl(request->fh.working_directory),
+	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: CAT '%s:%s' start=%d max=%d wd=%x results=%d error=%d\n",
+		  __func__, MAYBE_NULL(filename, str), MAYBE_NULL(volume, name),
+		  start, max, ntohl(request->fh.working_directory),
 		  cnt, error);
 	if (filename)
 		g_string_free(filename, TRUE);
@@ -1147,8 +1145,8 @@ static int handle_srm_createfile(struct srm_client *client,
 error:
 	if (fd != -1)
 		close(fd);
-	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: CREATE FILE: filename='%s' type=%d error=%d\n",
-		  __func__, filename ? filename->str : "", type, error);
+	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: CREATE FILE: file='%s:%s' type=%d error=%d\n",
+		  __func__, MAYBE_NULL(volume, name), MAYBE_NULL(filename, str), type, error);
 	if (filename)
 		g_string_free(filename, TRUE);
 	return error;
@@ -1187,9 +1185,11 @@ static int handle_srm_create_link(struct srm_client *client,
 
 	error = err ? errno_to_srm_error(client) : 0;
 error:
-	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: CREATELINK %s -> %s, purge %d, error %d\n", __func__,
-		  old_filename ? old_filename->str : "",
-		  new_filename ? new_filename->str : "", purge, error);
+	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: CREATELINK %s:%s -> %s, purge %d, error %d\n", __func__,
+		  MAYBE_NULL(volume, name),
+		  MAYBE_NULL(old_filename, str),
+		  MAYBE_NULL(new_filename, str),
+		  purge, error);
 	if (old_filename)
 		g_string_free(old_filename, TRUE);
 	if (new_filename)
@@ -1222,7 +1222,7 @@ static int handle_srm_volstatus(struct srm_client *client,
 		}
 	}
 	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: VOLSTATUS vname='%s' error=%d\n",
-		  __func__, volume ? volume->name : "", error);
+		  __func__, MAYBE_NULL(volume, name), error);
 	return error;
 }
 
@@ -1254,8 +1254,8 @@ static int handle_srm_purgelink(struct srm_client *client,
 			error = errno_to_srm_error(client);
 	}
 error:
-	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: PURGE LINK %s error=%d\n",
-		  __func__,filename->str, error);
+	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: PURGE LINK '%s:%s' error=%d\n",
+		  __func__, MAYBE_NULL(volume, name), MAYBE_NULL(filename, str), error);
 	g_string_free(filename, TRUE);
 	return error;
 }
