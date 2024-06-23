@@ -1721,7 +1721,14 @@ static void handle_srm_connect(struct srm_epoll_ctx *ctx, char *ipstr,
 	reply->rec_type = htons(SRM_REPLY_CONNECT);
 	reply->ret_code = 0;
 	reply->host_flag = 1;
-	reply->version = htons(10);
+	reply->my_node = client->config->node;
+	/*
+	 * Note: Pascal 3.23b requires version 10, while BASIC/WS 6.4 requires
+	 * version 11. To avoid having to change the version all the time manually,
+	 * just copy it from the request. No idea what the difference between
+	 * both versions is.
+	 */
+	reply->version = req->version;
 
 	ctx->outlen = sizeof(*reply);
 	srm_send(client, ctx, NULL);
