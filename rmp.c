@@ -163,7 +163,6 @@ static void rmp_handle_boot_req(struct rmp_epoll_ctx *ctx,
 	struct rmp_packet *packet = ctx->outbuf;
 	struct rmp_boot_reply *reply = ctx->outbuf + sizeof(*packet);
 
-	hexdump(SRM_DEBUG_RMP, NULL, "BOOTREQ", req, sizeof(*req));
 	if (strncmp(req->machtype, "HPS300", 6))
 		return;
 	memset(ctx->outbuf, 0, EPOLL_BUF_SIZE);
@@ -179,7 +178,6 @@ static void rmp_handle_boot_req(struct rmp_epoll_ctx *ctx,
 		rmp_boot_request_open(client, req, reply);
 
 	ctx->outlen = sizeof(struct rmp_boot_reply) + sizeof(struct rmp_packet) + reply->filenamesize;
-	hexdump(SRM_DEBUG_RMP, NULL, "BOOTREPLY", ctx->outbuf, ctx->outlen);
 	rmp_send(ctx, &ctx->addr);
 }
 
