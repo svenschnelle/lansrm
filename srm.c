@@ -668,8 +668,9 @@ static int handle_srm_close(struct srm_client *client,
 {
 	int id = ntohl(request->file_id);
 	struct open_file_entry *entry;
-	int error = 0;
+	int nodeallocate, error = 0;
 
+	nodeallocate = ntohl(request->nodeallocate);
 	entry = find_file_entry(client, id);
 	if (!entry)
 		return SRM_ERRNO_INVALID_FILE_ID;
@@ -683,7 +684,7 @@ static int handle_srm_close(struct srm_client *client,
 	}
 	g_tree_remove(open_files, entry->filename);
 	g_tree_remove(client->files, &id);
-	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: CLOSE %08x error %d\n", __func__, id, error);
+	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: CLOSE %08x nodeallocate %d error %d\n", __func__, id, nodeallocate, error);
 	return error;
 }
 
