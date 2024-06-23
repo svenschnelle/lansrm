@@ -55,6 +55,7 @@ struct client_config {
 	GList *volumes;
 	gchar **bootfiles;
 	char *bootpath;
+	char *tempdir;
 	int bootfilefd;
 	int hostnode;
 	int node;
@@ -75,6 +76,8 @@ struct open_file_entry {
 	struct srm_volume *volume;
 	GString *filename;
 	off_t hdr_offset;
+	srm_filetype_t filetype;
+	int unlink_on_close;
 	int client_fd;
 	int fd;
 	int cwd;

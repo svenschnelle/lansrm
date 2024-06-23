@@ -24,6 +24,7 @@
 
 static struct sockaddr_in bcaddr;
 static struct srm_epoll_ctx *srmctx;
+static GTree *open_files;
 
 struct srm_epoll_ctx {
 	struct fd_ctx *fdctx;
@@ -36,6 +37,14 @@ struct srm_epoll_ctx {
 	ssize_t outlen;
 	int fd;
 };
+
+static int srm_open_files_compare(const void *a, const void *b)
+{
+	const struct open_file_entry *filea = a;
+	const struct open_file_entry *fileb = b;
+
+	return strcmp(filea->filename->str, fileb->filename->str);
+}
 
 static int path_levels(char *pathname)
 {
@@ -304,8 +313,8 @@ static int handle_srm_write(struct srm_client *client,
 		return errno_to_srm_error(client);
 
 	response->actual = htonl(len);
-	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: WRITE offset=%x, requested=%d, written=%zd acc=%d\n",
-		  __func__, offset, requested, len, acc);
+	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: WRITE id=%08x offset=%x requested=%d written=%zd acc=%d\n",
+		  __func__, id, offset, requested, len, acc);
 	return 0;
 }
 
@@ -659,13 +668,20 @@ static int handle_srm_close(struct srm_client *client,
 {
 	int id = ntohl(request->file_id);
 	struct open_file_entry *entry;
-	int error;
+	int error = 0;
 
 	entry = find_file_entry(client, id);
 	if (!entry)
 		return SRM_ERRNO_INVALID_FILE_ID;
 
-	error = srm_update_file_header(client, entry);
+	if (entry->filetype == SRM_FILETYPE_REG_FILE)
+		error = srm_update_file_header(client, entry);
+
+	if (entry->unlink_on_close) {
+		if (srm_volume_unlink_file(client, entry->volume, entry->filename->str) == -1)
+			error = errno_to_srm_error(client);
+	}
+	g_tree_remove(open_files, entry->filename);
 	g_tree_remove(client->files, &id);
 	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: CLOSE %08x error %d\n", __func__, id, error);
 	return error;
@@ -726,6 +742,7 @@ error:
 	return volume;
 }
 
+#define TEMPFILE_STR "/WORKSTATIONS/TEMP_FILES"
 static GString *srm_get_filename(struct srm_client *client,
 				 struct srm_volume *volume,
 				 struct srm_file_header *fh,
@@ -735,6 +752,7 @@ static GString *srm_get_filename(struct srm_client *client,
 	struct open_file_entry *entry;
 	GString *ret, *filename;
 	int wd = ntohl(fh->working_directory);
+	char *p;
 
 	ret = g_string_sized_new(128);
 	if (wd) {
@@ -758,6 +776,14 @@ static GString *srm_get_filename(struct srm_client *client,
 		*error = SRM_ERRNO_FILE_PATHNAME_MISSING;
 		goto error;
 	}
+	if (client->config->tempdir) {
+		p = strstr(ret->str, TEMPFILE_STR);
+		if (p) {
+			p += sizeof(TEMPFILE_STR)-1;
+			g_string_printf(ret, "%s/%s", client->config->tempdir, p);
+		}
+	}
+	while(g_string_replace(ret, "//", "/", 0));
 	return ret;
 error:
 	g_string_free(ret, TRUE);
@@ -767,7 +793,8 @@ error:
 static int client_insert_file_entry(struct srm_client *client,
 				    struct srm_volume *volume,
 				    GString *filename,
-				    int fd, off_t hdr_offset)
+				    int fd, off_t hdr_offset,
+				    srm_filetype_t filetype)
 {
 	struct open_file_entry *entry = g_new0(struct open_file_entry, 1);
 	int file_id;
@@ -776,10 +803,10 @@ static int client_insert_file_entry(struct srm_client *client,
 	entry->fd = fd;
 	entry->hdr_offset = hdr_offset;
 	entry->volume = volume;
-
+	entry->filetype = filetype;
 	do {
-		file_id = g_random_int();
-	} while(!file_id || g_tree_lookup(client->files, &file_id));
+		file_id = g_random_int_range(1, INT_MAX);
+	} while(g_tree_lookup(client->files, &file_id));
 
 	entry->client_fd = file_id;
 
@@ -903,7 +930,7 @@ static int handle_srm_open(struct srm_client *client,
 		break;
 	}
 	if (!error)
-		response->file_id = htonl(client_insert_file_entry(client, volume, filename, fd, hdr_offset));
+		response->file_id = htonl(client_insert_file_entry(client, volume, filename, fd, hdr_offset, filetype));
 error:
 	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: OPEN file='%s' fd=%d id=%08x hdrsz=%ld error=%d\n",
 		  __func__, filename ? filename->str : "", fd, ntohl(response->file_id), hdr_offset, error);
@@ -1118,8 +1145,8 @@ static int handle_srm_createfile(struct srm_client *client,
 error:
 	if (fd != -1)
 		close(fd);
-	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: CREATE FILE: filename='%s' error=%d\n",
-		  __func__, filename->str, type);
+	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: CREATE FILE: filename='%s' type=%d error=%d\n",
+		  __func__, filename->str, type, error);
 	g_string_free(filename, TRUE);
 	return error;
 }
@@ -1200,7 +1227,9 @@ static int handle_srm_purgelink(struct srm_client *client,
 				struct srm_purge_link *request)
 {
 	int error = SRM_ERRNO_NO_ERROR;
+	struct open_file_entry *entry;
 	struct srm_volume *volume;
+
 	GString *filename;
 
 	volume = srm_volume_from_vh(client, &request->vh, &error);
@@ -1213,8 +1242,14 @@ static int handle_srm_purgelink(struct srm_client *client,
 	if (!filename)
 		goto error;
 
-	if (srm_volume_unlink_file(client, volume, filename->str) == -1)
-		error = errno_to_srm_error(client);
+	entry = g_tree_lookup(open_files, &filename->str);
+	if (entry) {
+		srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "delay unlink for %s\n", entry->filename->str);
+		entry->unlink_on_close = 1;
+	} else {
+		if (srm_volume_unlink_file(client, volume, filename->str) == -1)
+			error = errno_to_srm_error(client);
+	}
 error:
 	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: PURGE LINK %s error=%d\n",
 		  __func__,filename->str, error);
@@ -1232,10 +1267,32 @@ static int handle_srm_change_protect(struct srm_client *client)
 static int handle_srm_xchg_open(struct srm_client *client,
 				struct srm_xchg_open *request)
 {
-	(void)request;
-	(void)client;
+	struct open_file_entry *entry1, *entry2;
+	uint32_t id1, id2;
+	int fd;
 
-	return SRM_ERRNO_VOLUME_IO_ERROR;
+	id1 = ntohl(request->file_id1);
+	id2 = ntohl(request->file_id2);
+
+	entry1 = find_file_entry(client, id1);
+	if (!entry1)
+		return SRM_ERRNO_INVALID_FILE_ID;
+
+	entry2 = find_file_entry(client, id2);
+	if (!entry1)
+		return SRM_ERRNO_INVALID_FILE_ID;
+
+	if (renameat2(AT_FDCWD, entry1->filename->str,
+		      AT_FDCWD, entry2->filename->str,
+		      RENAME_EXCHANGE) == -1)
+		return SRM_ERRNO_VOLUME_IO_ERROR;
+
+	fd = entry2->fd;
+	entry2->fd = entry1->fd;
+	entry1->fd = fd;
+
+	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: XCHG OPEN\n", __func__);
+	return 0;
 }
 
 static int handle_srm_copy_file(struct srm_client *client,
@@ -1939,10 +1996,12 @@ int srm_init(GTree *clients)
 		srm_debug(SRM_DEBUG_ERROR, NULL, "%s: epoll_add: %m\n", __func__);
 		return -1;
 	}
+	open_files = g_tree_new(srm_open_files_compare);
 	return 0;
 }
 
 void srm_exit(void)
 {
+	g_tree_destroy(open_files);
 	srm_destroy_epoll_ctx(srmctx);
 }
