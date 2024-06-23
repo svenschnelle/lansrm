@@ -209,6 +209,7 @@ static struct client_config *parse_client_config(const char *name)
 	ret->bootfilefd = -1;
 	ret->volumes = read_volumes(name);
 	ret->node = g_key_file_get_integer(config.keyfile, name, "node", NULL);
+	ret->hostnode = g_key_file_get_integer(config.keyfile, name, "hostnode", NULL);
 	ret->bootfiles = g_key_file_get_string_list(config.keyfile, name, "bootfiles", NULL, NULL);
 	ret->bootpath = g_key_file_get_string(config.keyfile, name, "bootpath", NULL);
 	return ret;

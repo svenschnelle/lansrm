@@ -56,6 +56,7 @@ struct client_config {
 	gchar **bootfiles;
 	char *bootpath;
 	int bootfilefd;
+	int hostnode;
 	int node;
 };
 

@@ -1539,6 +1539,7 @@ static void handle_srm_xfer(struct srm_epoll_ctx *ctx,
 	struct srm_transfer *xfer = &request->xfer;
 	size_t srmlen, rlen = 0;
 
+	memset(ctx->outbuf, 0, EPOLL_BUF_SIZE);
 	srm_debug(SRM_DEBUG_XFER, client->ipstr, "%s: session=%d, version=%d, host_node=%d, unum=%d, sequence_no=%d\n",
 		__func__, ntohs(xfer->session_id), ntohs(xfer->version),
 		ntohs(xfer->host_node), xfer->unum, xfer->sequence_no);
@@ -1719,9 +1720,10 @@ static void handle_srm_connect(struct srm_epoll_ctx *ctx, char *ipstr,
 
 	memcpy(reply->my_station, req->station, sizeof(reply->my_station));
 	reply->rec_type = htons(SRM_REPLY_CONNECT);
-	reply->ret_code = 0;
+	reply->ret_code = htons(0);
 	reply->host_flag = 1;
-	reply->my_node = client->config->node;
+	reply->my_node = htons(client->config->node);
+	reply->host_node = htons(client->config->hostnode);
 	/*
 	 * Note: Pascal 3.23b requires version 10, while BASIC/WS 6.4 requires
 	 * version 11. To avoid having to change the version all the time manually,
