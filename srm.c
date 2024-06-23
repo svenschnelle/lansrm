@@ -756,7 +756,7 @@ static GString *srm_get_filename(struct srm_client *client,
 	char *p;
 
 	ret = g_string_sized_new(128);
-	if (wd) {
+	if (wd > 0) {
 		entry = g_tree_lookup(client->files, &wd);
 		if (!entry) {
 			*error = SRM_ERRNO_INVALID_FILE_ID;
