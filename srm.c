@@ -1117,7 +1117,8 @@ static int handle_srm_createfile(struct srm_client *client,
 error:
 	if (fd != -1)
 		close(fd);
-	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: CREATE FILE: filename='%s' %08x\n", __func__, filename->str, type);
+	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: CREATE FILE: filename='%s' error=%d\n",
+		  __func__, filename->str, type);
 	g_string_free(filename, TRUE);
 	return error;
 }
