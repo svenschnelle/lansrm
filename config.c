@@ -167,6 +167,8 @@ static struct srm_volume *read_volume(char *name, char *chrootpath)
 	ret->index = index;
 	return ret;
 error:
+	if (gerr)
+		g_error_free(gerr);
 	volume_free(ret);
 	return NULL;
 }
