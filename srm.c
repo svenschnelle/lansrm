@@ -388,6 +388,7 @@ static int srm_update_file_header(struct srm_client *client,
 	struct wshfs hdr;
 	off_t lif_offset;
 	struct stat statbuf;
+	uint32_t newsize;
 	int error = 0;
 	ssize_t ret;
 
@@ -437,7 +438,12 @@ static int srm_update_file_header(struct srm_client *client,
 		return -1;
 	}
 
-	hdr.lif.lif.size = htobe32((statbuf.st_size - entry->hdr_offset) / LIF_BLOCK_SIZE);
+	newsize = (statbuf.st_size - entry->hdr_offset) / LIF_BLOCK_SIZE;
+
+	if (be32toh(hdr.lif.lif.size) == newsize)
+		return 0;
+
+	hdr.lif.lif.size = htobe32(newsize);
 
 	ret = write(entry->fd, &hdr.lif, sizeof(hdr.lif));
 	if (ret == -1) {
