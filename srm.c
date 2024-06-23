@@ -1128,7 +1128,7 @@ static int handle_srm_createfile(struct srm_client *client,
 	filename = srm_get_filename(client, volume, &request->fh,
 				    request->filenames, 0, &error);
 	if (!filename)
-		return SRM_ERRNO_FILE_PATHNAME_MISSING;
+		goto error;
 	if (type == 3) {
 		if (srm_volume_mkdir(client, volume, filename->str) == -1)
 			error = errno_to_srm_error(client);
@@ -1147,8 +1147,9 @@ error:
 	if (fd != -1)
 		close(fd);
 	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: CREATE FILE: filename='%s' type=%d error=%d\n",
-		  __func__, filename->str, type, error);
-	g_string_free(filename, TRUE);
+		  __func__, filename ? filename->str : "", type, error);
+	if (filename)
+		g_string_free(filename, TRUE);
 	return error;
 }
 
