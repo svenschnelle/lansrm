@@ -32,4 +32,6 @@ struct client_config *get_client_config_hwaddr(uint8_t *hwaddr);
 void config_free(struct config *c);
 void read_client_configs(void);
 struct srm_volume *volume_by_name(struct client_config *client, const char *name);
+void strip_dup_slashes(GString *s);
+
 #endif

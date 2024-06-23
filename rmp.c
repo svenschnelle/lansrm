@@ -103,7 +103,7 @@ static void rmp_boot_request_open(struct client_config *client,
 		g_string_append_c(filename, '/');
 	}
 	g_string_append_len(filename, request->filename, request->filenamesize);
-
+	strip_dup_slashes(filename);
 	srm_debug(SRM_DEBUG_RMP, NULL, "%s: %s\n", __func__, filename->str);
 	if (client->bootfilefd != -1)
 		close(client->bootfilefd);

@@ -13,6 +13,12 @@
 
 struct config config;
 
+void strip_dup_slashes(GString *s)
+{
+	while(g_string_replace(s, "//", "/", 0));
+}
+
+
 struct client_config *get_client_config(struct sockaddr_in *addr)
 {
 	for (GList *p = config.configs; p; p = g_list_next(p)) {

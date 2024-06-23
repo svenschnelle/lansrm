@@ -772,7 +772,7 @@ static GString *srm_get_filename(struct srm_client *client,
 	if (filename->len)
 		g_string_append_printf(ret, "/%s", filename->str);
 	g_string_free(filename, TRUE);
-	while(g_string_replace(ret, "//", "/", 0));
+	strip_dup_slashes(ret);
 	if (path_levels(ret->str) < path_levels(volume->path)) {
 		srm_debug(SRM_DEBUG_ERROR, client->ipstr, "request outside of volume: %s\n", ret->str);
 		*error = SRM_ERRNO_FILE_PATHNAME_MISSING;
@@ -785,7 +785,7 @@ static GString *srm_get_filename(struct srm_client *client,
 			g_string_printf(ret, "%s/%s", client->config->tempdir, p);
 		}
 	}
-	while(g_string_replace(ret, "//", "/", 0));
+	strip_dup_slashes(ret);
 	return ret;
 error:
 	g_string_free(ret, TRUE);
