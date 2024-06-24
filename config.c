@@ -40,12 +40,12 @@ struct client_config *get_client_config_hwaddr(uint8_t *hwaddr)
 		 hwaddr[0], hwaddr[1], hwaddr[2], hwaddr[3], hwaddr[4], hwaddr[5]);
 	char *tmp = g_key_file_get_string(config.keyfile, "global", hwaddr_string, NULL);
 	if (!tmp) {
-		srm_debug(SRM_DEBUG_CONNECT, NULL, "unknown client %s\n", hwaddr_string);
+		dbgmsg(DBGMSG_CONNECT, NULL, "unknown client %s\n", hwaddr_string);
 		return NULL;
 	}
 	ret = inet_pton(AF_INET, tmp, &clientaddr.sin_addr);
 	if (ret != 1) {
-		srm_debug(SRM_DEBUG_FILE, hwaddr_string, "Failed to parse IP %s\n", tmp);
+		dbgmsg(DBGMSG_FILE, hwaddr_string, "Failed to parse IP %s\n", tmp);
 		g_free(tmp);
 			return NULL;
 	}
@@ -96,14 +96,14 @@ static struct srm_volume *read_volume(char *name, char *chrootpath)
 
 	index = g_key_file_get_integer(config.keyfile, name, "volume", &gerr);
 	if (gerr) {
-		srm_debug(SRM_DEBUG_ERROR, NULL, "failed to fetch index for volume %s: %s\n",
+		dbgmsg(DBGMSG_ERROR, NULL, "failed to fetch index for volume %s: %s\n",
 			  name, gerr->message);
 		goto error;
 	}
 
 	ret->path = g_key_file_get_string(config.keyfile, name, "path", &gerr);
 	if (!ret->path) {
-		srm_debug(SRM_DEBUG_ERROR, NULL, "failed to fetch path for volume %s: %s\n",
+		dbgmsg(DBGMSG_ERROR, NULL, "failed to fetch path for volume %s: %s\n",
 			  name, gerr->message);
 		goto error;
 	}
@@ -114,7 +114,7 @@ static struct srm_volume *read_volume(char *name, char *chrootpath)
 
 	ret->dir = opendir(ret->fullpath);
 	if (!ret->dir) {
-		srm_debug(SRM_DEBUG_ERROR, NULL, "opendir %s failed while adding volume %s: %m\n", ret->path, name);
+		dbgmsg(DBGMSG_ERROR, NULL, "opendir %s failed while adding volume %s: %m\n", ret->path, name);
 		goto error;
 	}
 
@@ -123,7 +123,7 @@ static struct srm_volume *read_volume(char *name, char *chrootpath)
 
 	ret->dirfd = dirfd(ret->dir);
 	if (ret->dirfd == -1) {
-		srm_debug(SRM_DEBUG_ERROR, NULL, "dirfd failed while adding volume %s: %m\n", name);
+		dbgmsg(DBGMSG_ERROR, NULL, "dirfd failed while adding volume %s: %m\n", name);
 		goto error;
 	}
 
@@ -134,7 +134,7 @@ static struct srm_volume *read_volume(char *name, char *chrootpath)
 			ret->uid = pwd->pw_uid;
 			g_free(uid);
 		} else {
-			srm_debug(SRM_DEBUG_ERROR, NULL, "failed to resolve uid '%s', "
+			dbgmsg(DBGMSG_ERROR, NULL, "failed to resolve uid '%s', "
 				  "ignoring volume '%s'\n", uid, name);
 			g_free(uid);
 			goto error;
@@ -148,7 +148,7 @@ static struct srm_volume *read_volume(char *name, char *chrootpath)
 			ret->gid = grp->gr_gid;
 			g_free(gid);
 		} else {
-			srm_debug(SRM_DEBUG_ERROR, NULL, "failed to resolve gid '%s', "
+			dbgmsg(DBGMSG_ERROR, NULL, "failed to resolve gid '%s', "
 				  "ignoring volume '%s'\n",
 				  gid, name);
 			g_free(gid);
@@ -160,7 +160,7 @@ static struct srm_volume *read_volume(char *name, char *chrootpath)
 	if (umask) {
 		ret->umask = strtoul(umask, &endp, 8);
 		if (*endp) {
-			srm_debug(SRM_DEBUG_ERROR, NULL, "failed to parse umask '%s' at '%s' in volume '%s' configuration\n",
+			dbgmsg(DBGMSG_ERROR, NULL, "failed to parse umask '%s' at '%s' in volume '%s' configuration\n",
 				  umask, endp, name);
 			g_free(umask);
 			goto error;
@@ -197,7 +197,7 @@ static GList *read_volumes(const char *name)
 			vol = read_volume(volumes[j], config.chroot);
 			if (!vol)
 				continue;
-			srm_debug(SRM_DEBUG_CONNECT, NULL, "adding %s volume %d: "
+			dbgmsg(DBGMSG_CONNECT, NULL, "adding %s volume %d: "
 				  "name='%s' path='%s' uid=%u gid=%u for client '%s'\n",
 				  i ? "global" : "local", vol->index, vol->name, vol->fullpath,
 				  vol->uid, vol->gid, name);
@@ -228,7 +228,7 @@ void read_client_configs(void)
 	struct client_config *client;
 	gchar **groups;
 
-	srm_debug(SRM_DEBUG_CONFIG, NULL, "parsing config\n");
+	dbgmsg(DBGMSG_CONFIG, NULL, "parsing config\n");
 	groups = g_key_file_get_groups(config.keyfile, NULL);
 
 	for (int i = 0; groups[i]; i++) {

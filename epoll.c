@@ -20,13 +20,13 @@ int epoll_clear_events(struct fd_ctx *ctx, uint32_t events)
 
 	ctx->event.events &= ~events;
 	ctx->event.data.ptr = ctx;
-	srm_debug(SRM_DEBUG_EPOLL, NULL, "%s: %p = old %d new: %d\n", __func__, ctx, events, ctx->event.events);
+	dbgmsg(DBGMSG_EPOLL, NULL, "%s: %p = old %d new: %d\n", __func__, ctx, events, ctx->event.events);
 	return epoll_ctl(ctx->efd, EPOLL_CTL_MOD, ctx->fd, &ctx->event);
 }
 
 int epoll_set_events(struct fd_ctx *ctx, uint32_t events)
 {
-	srm_debug(SRM_DEBUG_EPOLL, NULL, "%s: %p = %d\n", __func__, ctx, events);
+	dbgmsg(DBGMSG_EPOLL, NULL, "%s: %p = %d\n", __func__, ctx, events);
 	ctx->event.events |= events;
 	ctx->event.data.ptr = ctx;
 	return epoll_ctl(ctx->efd, EPOLL_CTL_MOD, ctx->fd, &ctx->event);
@@ -43,7 +43,7 @@ struct fd_ctx *epoll_add(int fd, uint32_t events, epoll_handler_t handler, void 
 	ctx->event.data.ptr = ctx;
 	ctx->event.events = events;
 
-	srm_debug(SRM_DEBUG_EPOLL, NULL, "%s: %p\n", __func__, ctx);
+	dbgmsg(DBGMSG_EPOLL, NULL, "%s: %p\n", __func__, ctx);
 	if (epoll_ctl(efd, EPOLL_CTL_ADD, fd, &ctx->event) == -1) {
 		g_free(ctx);
 		return NULL;
@@ -56,7 +56,7 @@ void epoll_free(struct fd_ctx *ctx)
 {
 	if (ctx->fd != -1)
 		close(ctx->fd);
-	srm_debug(SRM_DEBUG_EPOLL, NULL, "%s: %p\n", __func__, ctx);
+	dbgmsg(DBGMSG_EPOLL, NULL, "%s: %p\n", __func__, ctx);
 	g_free(ctx);
 }
 
@@ -70,7 +70,7 @@ int epoll_loop(void)
 		nfds = epoll_wait(efd, events, ARRAY_SIZE(events), 1000);
 		if (nfds == -1) {
 			if (errno != EINTR)
-				srm_debug(SRM_DEBUG_ERROR, NULL, "epoll_wait failed: %m\n");
+				dbgmsg(DBGMSG_ERROR, NULL, "epoll_wait failed: %m\n");
 			goto err;
 		}
 
@@ -92,7 +92,7 @@ int epoll_init(void)
 	efd = epoll_create(1024);
 
 	if (efd == -1) {
-		srm_debug(SRM_DEBUG_ERROR, NULL, "epoll_create: %m\n");
+		dbgmsg(DBGMSG_ERROR, NULL, "epoll_create: %m\n");
 		return -1;
 	}
 	return 0;

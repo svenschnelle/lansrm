@@ -37,16 +37,16 @@ void hexdump(int level, char *ipstr, char *prefix, void *buf, size_t len)
 
 	for (size_t offset = 0; offset < len; offset += 16) {
 		hexdump_line(out, buf + offset, MIN(len - offset, 16));
-		srm_debug(level, ipstr, "%s: %04x: %s\n", prefix, (int)offset, out);
+		dbgmsg(level, ipstr, "%s: %04x: %s\n", prefix, (int)offset, out);
 	}
 }
 
-void srm_debug(int level, const char *prefix, const char *fmt, ...)
+void dbgmsg(int level, const char *prefix, const char *fmt, ...)
 {
 	GString *msg;
 	va_list ap;
 
-	if ((level != SRM_DEBUG_ERROR) && !(config.debug & level))
+	if ((level != DBGMSG_ERROR) && !(config.debug & level))
 		return;
 
 	msg = g_string_sized_new(128);

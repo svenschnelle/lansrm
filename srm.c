@@ -109,13 +109,13 @@ static struct srm_volume *get_volume_by_index(struct srm_client *client, int ind
 static int srm_drop_privs(struct srm_client *client, struct srm_volume *volume)
 {
 	if (volume->gid && setresgid(volume->gid, volume->gid, 0) == -1) {
-		srm_debug(SRM_DEBUG_ERROR, client->ipstr, "%s: setregid(%d): %m\n",
+		dbgmsg(DBGMSG_ERROR, client->ipstr, "%s: setregid(%d): %m\n",
 			  __func__, volume->gid);
 		return -1;
 	}
 
 	if (volume->uid && setresuid(volume->uid, volume->uid, 0) == -1) {
-		srm_debug(SRM_DEBUG_ERROR, client->ipstr, "%s: setreuid(%d): %m\n",
+		dbgmsg(DBGMSG_ERROR, client->ipstr, "%s: setreuid(%d): %m\n",
 			  __func__, volume->uid);
 		return -1;
 	}
@@ -127,12 +127,12 @@ static int srm_drop_privs(struct srm_client *client, struct srm_volume *volume)
 static int srm_restore_privs(struct srm_client *client, struct srm_volume *volume)
 {
 	if (volume->uid && setresuid(0, 0, 0) == -1) {
-		srm_debug(SRM_DEBUG_ERROR, client->ipstr, "%s: setreuid: %m\n", __func__);
+		dbgmsg(DBGMSG_ERROR, client->ipstr, "%s: setreuid: %m\n", __func__);
 		return -1;
 	}
 
 	if (volume->gid && setresgid(0, 0, 0) == -1) {
-		srm_debug(SRM_DEBUG_ERROR, client->ipstr, "%s: setregid: %m\n", __func__);
+		dbgmsg(DBGMSG_ERROR, client->ipstr, "%s: setregid: %m\n", __func__);
 		return -1;
 	}
 	umask(volume->old_umask);
@@ -275,7 +275,7 @@ static int errno_to_srm_error(struct srm_client *client)
 	case EINVAL:
 		return SRM_ERRNO_VOLUME_IO_ERROR;
 	default:
-		srm_debug(SRM_DEBUG_ERROR, client->ipstr, "%s: unhandled errno %d (%m)\n", __func__, errno);
+		dbgmsg(DBGMSG_ERROR, client->ipstr, "%s: unhandled errno %d (%m)\n", __func__, errno);
 		return SRM_ERRNO_SOFTWARE_BUG;
 	}
 }
@@ -316,7 +316,7 @@ static int handle_srm_write(struct srm_client *client,
 		return errno_to_srm_error(client);
 
 	response->actual = htonl(len);
-	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: WRITE id=%08x offset=%x requested=%d written=%zd acc=%d\n",
+	dbgmsg(DBGMSG_REQUEST, client->ipstr, "%s: WRITE id=%08x offset=%x requested=%d written=%zd acc=%d\n",
 		  __func__, id, offset, requested, len, acc);
 	return 0;
 }
@@ -344,7 +344,7 @@ static int handle_srm_position(struct srm_client *client,
 	if (curpos == -1)
 		return errno_to_srm_error(client);
 
-	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: POSITION id=%x offset=%x, whence=%d\n",
+	dbgmsg(DBGMSG_REQUEST, client->ipstr, "%s: POSITION id=%x offset=%x, whence=%d\n",
 		  __func__, entry ? entry->client_fd : 0, offset, whence);
 
 	return 0;
@@ -387,7 +387,7 @@ static int handle_srm_read(struct srm_client *client,
 
 	*responselen = offsetof(struct srm_return_read, data) + len;
 
-	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: READ id=%x file='%s:%s' size=%d "
+	dbgmsg(DBGMSG_REQUEST, client->ipstr, "%s: READ id=%x file='%s:%s' size=%d "
 		  "actual=%zd offset=%x accesscode=%d, hdr_offset=%zx\n",
 		  __func__, id, MAYBE_NULL(entry, volume->name), MAYBE_NULL(entry, filename->str),
 		  requested, len, offset, acc, entry->hdr_offset);
@@ -489,7 +489,7 @@ static int handle_srm_set_eof(struct srm_client *client,
 	if (ftruncate(entry->fd, pos) == -1)
 		return errno_to_srm_error(client);
 	srm_update_file_header(client, entry);
-	srm_debug(SRM_DEBUG_FILE, client->ipstr, "%s: SET EOF: relative=%d pos=%08lx\n", __func__,
+	dbgmsg(DBGMSG_FILE, client->ipstr, "%s: SET EOF: relative=%d pos=%08lx\n", __func__,
 		  whence, pos + 1);
 	return 0;
 }
@@ -660,7 +660,7 @@ static int handle_srm_fileinfo(struct srm_client *client,
 	if (get_file_info(client, entry->volume, entry->filename->str, &response->fi) == -1)
 		return errno_to_srm_error(client);
 
-	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: FILEINFO id=%08x file='%s:%s'\n",
+	dbgmsg(DBGMSG_REQUEST, client->ipstr, "%s: FILEINFO id=%08x file='%s:%s'\n",
 		  __func__, id, MAYBE_NULL(entry, volume->name), MAYBE_NULL(entry, filename->str));
 	*responselen = sizeof(struct srm_return_fileinfo);
 	return 0;
@@ -685,7 +685,7 @@ static int handle_srm_close(struct srm_client *client,
 		if (srm_volume_unlink_file(client, entry->volume, entry->filename->str) == -1)
 			error = errno_to_srm_error(client);
 	}
-	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: CLOSE %08x file='%s:%s' nodeallocate %d error %d\n",
+	dbgmsg(DBGMSG_REQUEST, client->ipstr, "%s: CLOSE %08x file='%s:%s' nodeallocate %d error %d\n",
 		  __func__, id, MAYBE_NULL(entry, volume->name), MAYBE_NULL(entry, filename->str), nodeallocate, error);
 	g_tree_remove(open_files, entry->filename);
 	g_tree_remove(client->files, &id);
@@ -725,14 +725,14 @@ static struct srm_volume *srm_volume_from_vh(struct srm_client *client,
 	if (!present) {
 		volume = get_volume_by_name(client, name);
 		if (!volume) {
-			srm_debug(SRM_DEBUG_FILE, client->ipstr, "%s: failed to get volume %s\n", __func__, name);
+			dbgmsg(DBGMSG_FILE, client->ipstr, "%s: failed to get volume %s\n", __func__, name);
 			*error = SRM_ERRNO_VOLUME_NOT_FOUND;
 			goto error;
 		}
 	} else {
 		volume = get_volume_by_index(client, addr);
 		if (!volume) {
-			srm_debug(SRM_DEBUG_FILE, client->ipstr, "%s: failed to get volume %d\n", __func__, addr);
+			dbgmsg(DBGMSG_FILE, client->ipstr, "%s: failed to get volume %d\n", __func__, addr);
 			*error = SRM_ERRNO_VOLUME_NOT_FOUND;
 			goto error;
 		}
@@ -774,7 +774,7 @@ static GString *srm_get_filename(struct srm_client *client,
 	g_string_free(filename, TRUE);
 	strip_dup_slashes(ret);
 	if (path_levels(ret->str) < path_levels(volume->path)) {
-		srm_debug(SRM_DEBUG_ERROR, client->ipstr, "request outside of volume: %s\n", ret->str);
+		dbgmsg(DBGMSG_ERROR, client->ipstr, "request outside of volume: %s\n", ret->str);
 		*error = SRM_ERRNO_FILE_PATHNAME_MISSING;
 		goto error;
 	}
@@ -930,7 +930,7 @@ static int handle_srm_open(struct srm_client *client,
 	if (!error)
 		response->file_id = htonl(client_insert_file_entry(client, volume, filename, fd, hdr_offset, filetype));
 error:
-	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: OPEN file='%s:%s' fd=%d id=%08x hdrsz=%ld error=%d\n",
+	dbgmsg(DBGMSG_REQUEST, client->ipstr, "%s: OPEN file='%s:%s' fd=%d id=%08x hdrsz=%ld error=%d\n",
 		  __func__, MAYBE_NULL(volume, name), MAYBE_NULL(filename, str), fd,
 		  ntohl(response->file_id), hdr_offset, error);
 	if (filename && error)
@@ -1033,7 +1033,7 @@ static int handle_srm_catalog(struct srm_client *client,
 		break;
 	}
 error:
-	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: CAT '%s:%s' start=%d max=%d wd=%x results=%d error=%d\n",
+	dbgmsg(DBGMSG_REQUEST, client->ipstr, "%s: CAT '%s:%s' start=%d max=%d wd=%x results=%d error=%d\n",
 		  __func__, MAYBE_NULL(filename, str), MAYBE_NULL(volume, name),
 		  start, max, ntohl(request->fh.working_directory),
 		  cnt, error);
@@ -1145,7 +1145,7 @@ static int handle_srm_createfile(struct srm_client *client,
 error:
 	if (fd != -1)
 		close(fd);
-	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: CREATE FILE: file='%s:%s' type=%d error=%d\n",
+	dbgmsg(DBGMSG_REQUEST, client->ipstr, "%s: CREATE FILE: file='%s:%s' type=%d error=%d\n",
 		  __func__, MAYBE_NULL(volume, name), MAYBE_NULL(filename, str), type, error);
 	if (filename)
 		g_string_free(filename, TRUE);
@@ -1185,7 +1185,7 @@ static int handle_srm_create_link(struct srm_client *client,
 
 	error = err ? errno_to_srm_error(client) : 0;
 error:
-	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: CREATELINK %s:%s -> %s, purge %d, error %d\n", __func__,
+	dbgmsg(DBGMSG_REQUEST, client->ipstr, "%s: CREATELINK %s:%s -> %s, purge %d, error %d\n", __func__,
 		  MAYBE_NULL(volume, name),
 		  MAYBE_NULL(old_filename, str),
 		  MAYBE_NULL(new_filename, str),
@@ -1221,7 +1221,7 @@ static int handle_srm_volstatus(struct srm_client *client,
 			response->freesize = htonl(MIN(INT_MAX, bytesfree));
 		}
 	}
-	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: VOLSTATUS vname='%s' error=%d\n",
+	dbgmsg(DBGMSG_REQUEST, client->ipstr, "%s: VOLSTATUS vname='%s' error=%d\n",
 		  __func__, MAYBE_NULL(volume, name), error);
 	return error;
 }
@@ -1247,14 +1247,14 @@ static int handle_srm_purgelink(struct srm_client *client,
 
 	entry = g_tree_lookup(open_files, &filename->str);
 	if (entry) {
-		srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "delay unlink for %s\n", entry->filename->str);
+		dbgmsg(DBGMSG_REQUEST, client->ipstr, "delay unlink for %s\n", entry->filename->str);
 		entry->unlink_on_close = 1;
 	} else {
 		if (srm_volume_unlink_file(client, volume, filename->str) == -1)
 			error = errno_to_srm_error(client);
 	}
 error:
-	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: PURGE LINK '%s:%s' error=%d\n",
+	dbgmsg(DBGMSG_REQUEST, client->ipstr, "%s: PURGE LINK '%s:%s' error=%d\n",
 		  __func__, MAYBE_NULL(volume, name), MAYBE_NULL(filename, str), error);
 	g_string_free(filename, TRUE);
 	return error;
@@ -1263,7 +1263,7 @@ error:
 static int handle_srm_change_protect(struct srm_client *client)
 {
 
-	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: CHANGE PROTECT\n", __func__);
+	dbgmsg(DBGMSG_REQUEST, client->ipstr, "%s: CHANGE PROTECT\n", __func__);
 	return 0;
 }
 
@@ -1294,7 +1294,7 @@ static int handle_srm_xchg_open(struct srm_client *client,
 	entry2->fd = entry1->fd;
 	entry1->fd = fd;
 
-	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: XCHG OPEN\n", __func__);
+	dbgmsg(DBGMSG_REQUEST, client->ipstr, "%s: XCHG OPEN\n", __func__);
 	return 0;
 }
 
@@ -1311,7 +1311,7 @@ static int handle_srm_copy_file(struct srm_client *client,
 	file_id2 = ntohl(request->file_id2);
 	requested = ntohl(request->requested);
 
-	srm_debug(SRM_DEBUG_REQUEST, client->ipstr, "%s: COPY FILE %x(%d,%d) -> %x(%d)\n",
+	dbgmsg(DBGMSG_REQUEST, client->ipstr, "%s: COPY FILE %x(%d,%d) -> %x(%d)\n",
 		  __func__, file_id1, offset1, requested, file_id2, offset2);
 
 	entry1 = find_file_entry(client, file_id1);
@@ -1580,7 +1580,7 @@ size_t srm_handle_request(struct srm_client *client,
 		ret = handle_srm_copy_file(client, (void *)request->payload);
 		break;
 	default:
-		srm_debug(SRM_DEBUG_ERROR, client->ipstr, "%s: unknown request %d\n",
+		dbgmsg(DBGMSG_ERROR, client->ipstr, "%s: unknown request %d\n",
 			__func__, ntohl(request->hdr.request_type));
 		break;
 	}
@@ -1594,7 +1594,7 @@ size_t srm_handle_request(struct srm_client *client,
 	response->hdr.return_request_type = htonl(-htonl(request->hdr.request_type));
 	response->hdr.user_sequencing_field = request->hdr.user_sequencing_field;
 	response->hdr.level = level;
-	srm_debug(SRM_DEBUG_RESPONSE, client->ipstr, "%s = %s (%d), sequence = %x\n",
+	dbgmsg(DBGMSG_RESPONSE, client->ipstr, "%s = %s (%d), sequence = %x\n",
 		  srm_request_to_name(type), srm_strerror(ret), ret, ntohl(request->hdr.user_sequencing_field));
 	return responselen;
 }
@@ -1607,24 +1607,24 @@ static int srm_send(struct srm_client *client, struct srm_epoll_ctx *ctx, struct
 	if (!addr)
 		addr = &bcaddr;
 
-	srm_debug(SRM_DEBUG_RESPONSE, ipstr, "sending %zd bytes\n", ctx->outlen);
+	dbgmsg(DBGMSG_RESPONSE, ipstr, "sending %zd bytes\n", ctx->outlen);
 	ret = sendto(ctx->fd, ctx->outbuf, ctx->outlen, 0,
 		     (struct sockaddr *)addr, sizeof(*addr));
 	if (ret == -1) {
 		if (errno != EAGAIN) {
-			srm_debug(SRM_DEBUG_ERROR, client->ipstr, "sendto: %m\n");
+			dbgmsg(DBGMSG_ERROR, client->ipstr, "sendto: %m\n");
 			return -1;
 		}
 
 		if (epoll_set_events(ctx->fdctx, EPOLLOUT) == -1) {
-			srm_debug(SRM_DEBUG_ERROR, client->ipstr, "epoll_set_events: %m\n");
+			dbgmsg(DBGMSG_ERROR, client->ipstr, "epoll_set_events: %m\n");
 			return -1;
 		}
 		return 0;
 	}
 
 	if (ret != ctx->outlen) {
-		srm_debug(SRM_DEBUG_ERROR, ipstr, "sendto: only wrote %zd out of %zd bytes\n",
+		dbgmsg(DBGMSG_ERROR, ipstr, "sendto: only wrote %zd out of %zd bytes\n",
 			  ret, ctx->outlen);
 		return -1;
 	}
@@ -1643,7 +1643,7 @@ static void handle_srm_xfer(struct srm_epoll_ctx *ctx,
 	size_t srmlen, rlen = 0;
 
 	memset(ctx->outbuf, 0, EPOLL_BUF_SIZE);
-	srm_debug(SRM_DEBUG_XFER, client->ipstr, "%s: session=%d, version=%d, host_node=%d, unum=%d, sequence_no=%d\n",
+	dbgmsg(DBGMSG_XFER, client->ipstr, "%s: session=%d, version=%d, host_node=%d, unum=%d, sequence_no=%d\n",
 		__func__, ntohs(xfer->session_id), ntohs(xfer->version),
 		ntohs(xfer->host_node), xfer->unum, xfer->sequence_no);
 
@@ -1651,24 +1651,24 @@ static void handle_srm_xfer(struct srm_epoll_ctx *ctx,
 		response->xfer.ret_code = htons(5); // BAD SIZE
 		goto send;
 	}
-	hexdump(SRM_DEBUG_PACKET_RX, client->ipstr, "RX XFR", &request->xfer, sizeof(request->xfer));
-	hexdump(SRM_DEBUG_PACKET_RX, client->ipstr, "RX HDR", &request->srm.hdr, sizeof(request->srm.hdr));
+	hexdump(DBGMSG_PACKET_RX, client->ipstr, "RX XFR", &request->xfer, sizeof(request->xfer));
+	hexdump(DBGMSG_PACKET_RX, client->ipstr, "RX HDR", &request->srm.hdr, sizeof(request->srm.hdr));
 
 	srmlen = len - offsetof(struct lansrm_request_packet, srm);
 	if (srmlen < ntohl(request->srm.hdr.message_length)) {
-		srm_debug(SRM_DEBUG_ERROR, client->ipstr, "bad srm message size: %zd < %d\n",
+		dbgmsg(DBGMSG_ERROR, client->ipstr, "bad srm message size: %zd < %d\n",
 			  srmlen, ntohl(request->srm.hdr.message_length));
 		response->xfer.ret_code = htons(5); // BAD SIZE
 		goto send;
 	}
-	hexdump(SRM_DEBUG_PACKET_RX, client->ipstr, "RX DAT", &request->srm.payload, srmlen);
+	hexdump(DBGMSG_PACKET_RX, client->ipstr, "RX DAT", &request->srm.payload, srmlen);
 	rlen = srm_handle_request(client, &request->srm, &response->srm);
 send:
 	memcpy(&response->xfer, &request->xfer, sizeof(struct srm_transfer));
 	response->xfer.rec_type = htons(SRM_REPLY_XFER);
-	hexdump(SRM_DEBUG_PACKET_RX, client->ipstr, "TX XFR", &response->xfer, sizeof(response->xfer));
-	hexdump(SRM_DEBUG_PACKET_RX, client->ipstr, "TX HDR", &response->srm.hdr, sizeof(response->srm.hdr));
-	hexdump(SRM_DEBUG_PACKET_RX, client->ipstr, "TX DAT", &response->srm.payload, rlen);
+	hexdump(DBGMSG_PACKET_RX, client->ipstr, "TX XFR", &response->xfer, sizeof(response->xfer));
+	hexdump(DBGMSG_PACKET_RX, client->ipstr, "TX HDR", &response->srm.hdr, sizeof(response->srm.hdr));
+	hexdump(DBGMSG_PACKET_RX, client->ipstr, "TX DAT", &response->srm.payload, rlen);
 
 	rlen += sizeof(struct srm_transfer);
 	ctx->outlen = rlen;
@@ -1695,12 +1695,12 @@ static int srm_connect_fill_ip_node(struct srm_connect_reply *reply,
 	if (hwaddr_string) {
 		tmp = g_key_file_get_string(config.keyfile, "global", hwaddr_string, NULL);
 		if (!tmp) {
-			srm_debug(SRM_DEBUG_CONNECT, client->ipstr, "unknown client %s\n", hwaddr_string);
+			dbgmsg(DBGMSG_CONNECT, client->ipstr, "unknown client %s\n", hwaddr_string);
 			return -1;
 		}
 		ret = inet_pton(AF_INET, tmp, &clientaddr);
 		if (ret != 1) {
-			srm_debug(SRM_DEBUG_FILE, client->ipstr, "Failed to parse IP %s\n", tmp);
+			dbgmsg(DBGMSG_FILE, client->ipstr, "Failed to parse IP %s\n", tmp);
 			g_free(tmp);
 			return -1;
 		}
@@ -1711,13 +1711,13 @@ static int srm_connect_fill_ip_node(struct srm_connect_reply *reply,
 
 	tmp = g_key_file_get_string(config.keyfile, "global", "hostip", NULL);
 	if (!tmp) {
-		srm_debug(SRM_DEBUG_CONNECT, client->ipstr, "no hostip set in global section\n");
+		dbgmsg(DBGMSG_CONNECT, client->ipstr, "no hostip set in global section\n");
 		return -1;
 	}
 	ret = inet_pton(AF_INET, tmp, &hostaddr);
 	g_free(tmp);
 	if (ret != 1) {
-		srm_debug(SRM_DEBUG_FILE, client->ipstr, "Failed to parse IP %s\n", tmp);
+		dbgmsg(DBGMSG_FILE, client->ipstr, "Failed to parse IP %s\n", tmp);
 		g_free(tmp);
 		return -1;
 	}
@@ -1774,7 +1774,7 @@ static void srm_reject_client_xfer(struct srm_epoll_ctx *ctx, char *name)
 	struct srm_transfer *request = ctx->outbuf;
 	struct srm_transfer *reply = ctx->outbuf;
 
-	srm_debug(SRM_DEBUG_ERROR, NULL, "reject XFER from %s\n", name);
+	dbgmsg(DBGMSG_ERROR, NULL, "reject XFER from %s\n", name);
 	memcpy(reply, request, sizeof(*reply));
 	request->ret_code = htons(4);
 	request->rec_type = htons(SRM_REPLY_XFER);
@@ -1788,7 +1788,7 @@ static void srm_reject_client_connect(struct srm_epoll_ctx *ctx, char *name,
 	struct srm_connect_request *request = ctx->inbuf;
 	struct srm_connect_reply *reply = ctx->outbuf;
 
-	srm_debug(SRM_DEBUG_ERROR, NULL, "reject CONNECT from %s\n", name);
+	dbgmsg(DBGMSG_ERROR, NULL, "reject CONNECT from %s\n", name);
 	memcpy(reply->my_station, request->station, ETH_ALEN);
 	reply->ret_code = htons(4);
 	reply->rec_type = htons(SRM_REPLY_CONNECT);
@@ -1811,7 +1811,7 @@ static void handle_srm_connect(struct srm_epoll_ctx *ctx, char *ipstr,
 		 hwaddr[0], hwaddr[1], hwaddr[2], hwaddr[3], hwaddr[4], hwaddr[5]);
 
 	client = srm_new_client(ctx->clients, &ctx->addr, ctx->addrlen, hwaddr_string, reply);
-	srm_debug(SRM_DEBUG_CONNECT, client->ipstr, "%s: code=%d, option=%d, node=%d, version=%d, station=%s host=%s\n",
+	dbgmsg(DBGMSG_CONNECT, client->ipstr, "%s: code=%d, option=%d, node=%d, version=%d, station=%s host=%s\n",
 		  __func__, ntohs(req->ret_code), ntohs(req->option_code),
 		  ntohs(req->host_node), ntohs(req->version),
 		  hwaddr_string, ipstr);
@@ -1849,14 +1849,14 @@ static void handle_rx(struct srm_epoll_ctx *ctx)
 	size_t len = ctx->inlen;
 
 	if (!inet_ntop(AF_INET, &ctx->addr.sin_addr.s_addr, ipstr, ctx->addrlen)) {
-		srm_debug(SRM_DEBUG_PACKET_RX, NULL, "%s: inet_ntop: %m\n", __func__);
+		dbgmsg(DBGMSG_PACKET_RX, NULL, "%s: inet_ntop: %m\n", __func__);
 		return;
 	}
 
 	switch (ntohs(packet->xfer.rec_type)) {
 	case SRM_REQUEST_CONNECT:
 		if (len < sizeof(struct srm_connect_request)) {
-			srm_debug(SRM_DEBUG_ERROR, NULL, "short srm request: %zd bytes\n", len);
+			dbgmsg(DBGMSG_ERROR, NULL, "short srm request: %zd bytes\n", len);
 			break;
 		}
 		handle_srm_connect(ctx, ipstr, &ctx->addr);
@@ -1864,13 +1864,13 @@ static void handle_rx(struct srm_epoll_ctx *ctx)
 
 	case SRM_REQUEST_XFER:
 		if (len < sizeof(struct srm_transfer)) {
-			srm_debug(SRM_DEBUG_ERROR, NULL, "short srm request: %zd bytes\n", len);
+			dbgmsg(DBGMSG_ERROR, NULL, "short srm request: %zd bytes\n", len);
 			break;
 		}
 		client = g_tree_lookup(clients, &ctx->addr);
 		if (!client) {
 			if (!g_key_file_get_boolean(config.keyfile, "global", "accept_unknown", NULL)) {
-				srm_debug(SRM_DEBUG_ERROR, client->ipstr, "client without connect: %s\n", ipstr);
+				dbgmsg(DBGMSG_ERROR, client->ipstr, "client without connect: %s\n", ipstr);
 				srm_reject_client_xfer(ctx, ipstr);
 				break;
 			}
@@ -1892,7 +1892,7 @@ static void handle_rx(struct srm_epoll_ctx *ctx)
 		break;
 
 	default:
-		hexdump(SRM_DEBUG_PACKET_RX, NULL, "UNKNOWN", ctx->inbuf, len);
+		hexdump(DBGMSG_PACKET_RX, NULL, "UNKNOWN", ctx->inbuf, len);
 		break;
 	}
 }
@@ -1915,7 +1915,7 @@ static int srm_handle_fd(int fd, struct epoll_event *ev, void *arg)
 	}
 
 	if (ev->events & EPOLLERR) {
-		srm_debug(SRM_DEBUG_ERROR, NULL, "error while reading srm fd\n");
+		dbgmsg(DBGMSG_ERROR, NULL, "error while reading srm fd\n");
 		return -1;
 	}
 	return 0;
@@ -1928,7 +1928,7 @@ static struct srm_epoll_ctx *srm_create_epoll_ctx(GTree *clients, int fd)
 	ctx->inbuf = g_malloc0(EPOLL_BUF_SIZE);
 	ctx->outbuf = g_malloc0(EPOLL_BUF_SIZE);
 	ctx->fd = fd;
-	srm_debug(SRM_DEBUG_EPOLL, NULL, "%s: %p\n", __func__, ctx);
+	dbgmsg(DBGMSG_EPOLL, NULL, "%s: %p\n", __func__, ctx);
 	return ctx;
 }
 
@@ -1946,7 +1946,7 @@ static int srm_create_socket(char *dev)
 
 	fd = socket(AF_INET, SOCK_DGRAM, SOL_UDP);
 	if (fd == -1) {
-		srm_debug(SRM_DEBUG_ERROR, NULL, "failed to create socket: %m\n");
+		dbgmsg(DBGMSG_ERROR, NULL, "failed to create socket: %m\n");
 		return -1;
 	}
 
@@ -1955,25 +1955,25 @@ static int srm_create_socket(char *dev)
 	addr.sin_family = AF_INET;
 
 	if (setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &on, sizeof(on)) == -1) {
-		srm_debug(SRM_DEBUG_ERROR, NULL, "failed to set SO_BROADCAST: %m\n");
+		dbgmsg(DBGMSG_ERROR, NULL, "failed to set SO_BROADCAST: %m\n");
 		close(fd);
 		return -1;
 	}
 
 	if (dev && setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, dev, strlen(dev)) == -1) {
-		srm_debug(SRM_DEBUG_ERROR, NULL, "failed to set SO_BINDTODEVICE: %m\n");
+		dbgmsg(DBGMSG_ERROR, NULL, "failed to set SO_BINDTODEVICE: %m\n");
 		close(fd);
 		return -1;
 	}
 
 	if (fcntl(fd, F_SETFL, O_NONBLOCK) == -1) {
-		srm_debug(SRM_DEBUG_ERROR, NULL, "failed to set O_NONBLOCK: %m\n");
+		dbgmsg(DBGMSG_ERROR, NULL, "failed to set O_NONBLOCK: %m\n");
 		close(fd);
 		return -1;
 	}
 
 	if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) == -1) {
-		srm_debug(SRM_DEBUG_ERROR, NULL, "failed to bind socket: %m\n");
+		dbgmsg(DBGMSG_ERROR, NULL, "failed to bind socket: %m\n");
 		close(fd);
 		return -1;
 	}
@@ -1996,7 +1996,7 @@ int srm_init(GTree *clients)
 	srmctx = srm_create_epoll_ctx(clients, fd);
 	srmctx->fdctx = epoll_add(fd, EPOLLIN|EPOLLERR, srm_handle_fd, srmctx);
 	if (!srmctx->fdctx) {
-		srm_debug(SRM_DEBUG_ERROR, NULL, "%s: epoll_add: %m\n", __func__);
+		dbgmsg(DBGMSG_ERROR, NULL, "%s: epoll_add: %m\n", __func__);
 		return -1;
 	}
 	open_files = g_tree_new(srm_open_files_compare);

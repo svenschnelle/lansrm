@@ -4,22 +4,22 @@
 #include <stdint.h>
 
 typedef enum {
-	SRM_DEBUG_REQUEST=1,
-	SRM_DEBUG_RESPONSE=2,
-	SRM_DEBUG_CONNECT=4,
-	SRM_DEBUG_XFER=8,
-	SRM_DEBUG_FILE=16,
-	SRM_DEBUG_PACKET_RX=32,
-	SRM_DEBUG_PACKET_TX=64,
-	SRM_DEBUG_ERROR=128,
-	SRM_DEBUG_CONFIG=256,
-	SRM_DEBUG_EPOLL=512,
-	SRM_DEBUG_RMP=1024
+	DBGMSG_REQUEST=1,
+	DBGMSG_RESPONSE=2,
+	DBGMSG_CONNECT=4,
+	DBGMSG_XFER=8,
+	DBGMSG_FILE=16,
+	DBGMSG_PACKET_RX=32,
+	DBGMSG_PACKET_TX=64,
+	DBGMSG_ERROR=128,
+	DBGMSG_CONFIG=256,
+	DBGMSG_EPOLL=512,
+	DBGMSG_RMP=1024
 } srm_debug_level_t;
 
 struct srm_client;
 
-void srm_debug(int level, const char *prefix, const char *fmt, ...) __attribute__ ((format (printf, 3, 4)));
+void dbgmsg(int level, const char *prefix, const char *fmt, ...) __attribute__ ((format (printf, 3, 4)));
 
 void hexdump(int level, char *ipstr,
 	     char *prefix, void *buf, size_t len);

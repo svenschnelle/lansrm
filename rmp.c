@@ -22,23 +22,23 @@ int create_rmp_socket(char *dev)
 
 	fd = socket(AF_PACKET, SOCK_DGRAM, htons(ETH_P_802_2));
 	if (fd == -1) {
-		srm_debug(SRM_DEBUG_ERROR, NULL, "failed to create socket: %m\n");
+		dbgmsg(DBGMSG_ERROR, NULL, "failed to create socket: %m\n");
 		return -1;
 	}
 
 	if (dev && setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, dev, strlen(dev)) == -1) {
-		srm_debug(SRM_DEBUG_ERROR, NULL, "failed to set SO_BINDTODEVICE: %m\n");
+		dbgmsg(DBGMSG_ERROR, NULL, "failed to set SO_BINDTODEVICE: %m\n");
 		close(fd);
 		return -1;
 	}
 
 	if (fcntl(fd, F_SETFL, O_NONBLOCK) == -1) {
-		srm_debug(SRM_DEBUG_ERROR, NULL, "failed to set O_NONBLOCK: %m\n");
+		dbgmsg(DBGMSG_ERROR, NULL, "failed to set O_NONBLOCK: %m\n");
 		close(fd);
 		return -1;
 	}
 	if (0 && bind(fd, (struct sockaddr *)&addr, sizeof(addr)) == -1) {
-		srm_debug(SRM_DEBUG_ERROR, NULL, "failed to bind socket: %m\n");
+		dbgmsg(DBGMSG_ERROR, NULL, "failed to bind socket: %m\n");
 		close(fd);
 		return -1;
 	}
@@ -50,24 +50,24 @@ static int rmp_send(struct rmp_epoll_ctx *ctx, struct sockaddr_ll *addr)
 {
 	ssize_t ret;
 
-	srm_debug(SRM_DEBUG_RESPONSE, NULL, "sending %zd bytes\n", ctx->outlen);
+	dbgmsg(DBGMSG_RESPONSE, NULL, "sending %zd bytes\n", ctx->outlen);
 	ret = sendto(ctx->fd, ctx->outbuf, ctx->outlen, 0,
 		     (struct sockaddr *)addr, sizeof(*addr));
 	if (ret == -1) {
 		if (errno != EAGAIN) {
-			srm_debug(SRM_DEBUG_ERROR, NULL, "sendto: %m\n");
+			dbgmsg(DBGMSG_ERROR, NULL, "sendto: %m\n");
 			return -1;
 		}
 
 		if (epoll_set_events(ctx->fdctx, EPOLLOUT) == -1) {
-			srm_debug(SRM_DEBUG_ERROR, NULL, "epoll_set_events: %m\n");
+			dbgmsg(DBGMSG_ERROR, NULL, "epoll_set_events: %m\n");
 			return -1;
 		}
 		return 0;
 	}
 
 	if (ret != ctx->outlen) {
-		srm_debug(SRM_DEBUG_ERROR, NULL, "sendto: only wrote %zd out of %zd bytes\n",
+		dbgmsg(DBGMSG_ERROR, NULL, "sendto: only wrote %zd out of %zd bytes\n",
 			  ret, ctx->outlen);
 		return -1;
 	}
@@ -90,7 +90,7 @@ static void rmp_boot_request_open(struct client_config *client,
 		*p++ = '\0';
 	volume = volume_by_name(client, vname);
 	if (!volume) {
-		srm_debug(SRM_DEBUG_ERROR, NULL, "%s: volume '%s' not found\n",
+		dbgmsg(DBGMSG_ERROR, NULL, "%s: volume '%s' not found\n",
 			  __func__, client->bootpath);
 		reply->retcode = RMP_E_NOFILE;
 		free(vname);
@@ -104,12 +104,12 @@ static void rmp_boot_request_open(struct client_config *client,
 	}
 	g_string_append_len(filename, request->filename, request->filenamesize);
 	strip_dup_slashes(filename);
-	srm_debug(SRM_DEBUG_RMP, NULL, "%s: %s\n", __func__, filename->str);
+	dbgmsg(DBGMSG_ERROR, NULL, "%s: %s\n", __func__, filename->str);
 	if (client->bootfilefd != -1)
 		close(client->bootfilefd);
 	client->bootfilefd = open(filename->str, O_RDONLY);
 	if (client->bootfilefd == -1) {
-		srm_debug(SRM_DEBUG_ERROR, NULL, "open %s: %m\n", filename->str);
+		dbgmsg(DBGMSG_ERROR, NULL, "open %s: %m\n", filename->str);
 		reply->retcode = RMP_E_NOFILE;
 	} else {
 		memcpy(reply->filename, request->filename, request->filenamesize);
@@ -193,7 +193,7 @@ static void rmp_handle_read_req(struct rmp_epoll_ctx *ctx,
 	memset(ctx->outbuf, 0, EPOLL_BUF_SIZE);
 	rmp_setup_packet_header(packet);
 
-	srm_debug(SRM_DEBUG_RMP, NULL, "%s: offset=%x size=%d\n", __func__, offset, size);
+	dbgmsg(DBGMSG_RMP, NULL, "%s: offset=%x size=%d\n", __func__, offset, size);
 	if (client->bootfilefd == -1) {
 		reply->retcode = RMP_E_ABORT;
 		reply->offset = request->offset;
@@ -245,7 +245,7 @@ static void handle_rmp_packet(struct rmp_epoll_ctx *ctx, struct client_config *c
 		rmp_handle_done_req(client);
 		break;
 	default:
-		srm_debug(SRM_DEBUG_RMP, NULL, "unknown request %d\n", raw->rmp_type);
+		dbgmsg(DBGMSG_RMP, NULL, "unknown request %d\n", raw->rmp_type);
 		break;
 	}
 }
@@ -268,7 +268,7 @@ static int rmp_handle_fd(int fd, struct epoll_event *ev, void *arg)
 			ctx->inlen = len;
 			config = get_client_config_hwaddr(ctx->addr.sll_addr);
 			if (!config || !config->bootfiles || !config->bootpath) {
-				srm_debug(SRM_DEBUG_ERROR, NULL, "no config for client %02x:%02x:%02x:%02x:%02x:%02x\n",
+				dbgmsg(DBGMSG_ERROR, NULL, "no config for client %02x:%02x:%02x:%02x:%02x:%02x\n",
 					  ctx->addr.sll_addr[0], ctx->addr.sll_addr[1], ctx->addr.sll_addr[2],
 					  ctx->addr.sll_addr[3], ctx->addr.sll_addr[4], ctx->addr.sll_addr[5]);
 				return 0;
@@ -278,7 +278,7 @@ static int rmp_handle_fd(int fd, struct epoll_event *ev, void *arg)
 	}
 
 	if (ev->events & EPOLLERR) {
-		srm_debug(SRM_DEBUG_ERROR, NULL, "error while reading srm fd\n");
+		dbgmsg(DBGMSG_ERROR, NULL, "error while reading srm fd\n");
 		return -1;
 	}
 	return 0;
@@ -293,7 +293,7 @@ static struct rmp_epoll_ctx *rmp_create_epoll_ctx(GTree *clients, int fd)
 	ctx->outbuf = g_malloc0(EPOLL_BUF_SIZE);
 	ctx->fd = fd;
 	ctx->event.events = EPOLLIN|EPOLLERR;
-	srm_debug(SRM_DEBUG_EPOLL, NULL, "%s: %p\n", __func__, ctx);
+	dbgmsg(DBGMSG_EPOLL, NULL, "%s: %p\n", __func__, ctx);
 	return ctx;
 }
 
@@ -311,24 +311,24 @@ static int rmp_create_socket(char *dev)
 
 	fd = socket(AF_PACKET, SOCK_DGRAM, ntohs(ETH_P_802_2));
 	if (fd == -1) {
-		srm_debug(SRM_DEBUG_ERROR, NULL, "failed to create socket: %m\n");
+		dbgmsg(DBGMSG_ERROR, NULL, "failed to create socket: %m\n");
 		return -1;
 	}
 
 	if (setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &on, sizeof(on)) == -1) {
-		srm_debug(SRM_DEBUG_ERROR, NULL, "failed to set SO_BROADCAST: %m\n");
+		dbgmsg(DBGMSG_ERROR, NULL, "failed to set SO_BROADCAST: %m\n");
 		close(fd);
 		return -1;
 	}
 
 	if (dev && setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, dev, strlen(dev)) == -1) {
-		srm_debug(SRM_DEBUG_ERROR, NULL, "failed to set SO_BINDTODEVICE: %m\n");
+		dbgmsg(DBGMSG_ERROR, NULL, "failed to set SO_BINDTODEVICE: %m\n");
 		close(fd);
 		return -1;
 	}
 
 	if (fcntl(fd, F_SETFL, O_NONBLOCK) == -1) {
-		srm_debug(SRM_DEBUG_ERROR, NULL, "failed to set O_NONBLOCK: %m\n");
+		dbgmsg(DBGMSG_ERROR, NULL, "failed to set O_NONBLOCK: %m\n");
 		close(fd);
 		return -1;
 	}
@@ -345,7 +345,7 @@ int rmp_init(GTree *clients)
 	rmpctx = rmp_create_epoll_ctx(clients, fd);
 	rmpctx->fdctx = epoll_add(fd, EPOLLIN|EPOLLERR, rmp_handle_fd, rmpctx);
 	if (!rmpctx->fdctx) {
-		srm_debug(SRM_DEBUG_ERROR, NULL, "%s: epoll_add: %m\n", __func__);
+		dbgmsg(DBGMSG_ERROR, NULL, "%s: epoll_add: %m\n", __func__);
 		return -1;
 	}
 	return 0;
