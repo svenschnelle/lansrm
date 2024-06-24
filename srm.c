@@ -316,8 +316,8 @@ static int handle_srm_write(struct srm_client *client,
 		return errno_to_srm_error(client);
 
 	response->actual = htonl(len);
-	dbgmsg(DBGMSG_REQUEST, client->ipstr, "%s: WRITE id=%08x offset=%x requested=%d written=%zd acc=%d\n",
-		  __func__, id, offset, requested, len, acc);
+	dbgmsg(DBGMSG_REQUEST, client->ipstr, "WRITE id=%08x offset=%x requested=%d written=%zd acc=%d\n",
+		  id, offset, requested, len, acc);
 	return 0;
 }
 
@@ -344,8 +344,8 @@ static int handle_srm_position(struct srm_client *client,
 	if (curpos == -1)
 		return errno_to_srm_error(client);
 
-	dbgmsg(DBGMSG_REQUEST, client->ipstr, "%s: POSITION id=%x offset=%x, whence=%d\n",
-		  __func__, entry ? entry->client_fd : 0, offset, whence);
+	dbgmsg(DBGMSG_REQUEST, client->ipstr, "POSITION id=%x offset=%x, whence=%d\n",
+	       entry ? entry->client_fd : 0, offset, whence);
 
 	return 0;
 }
@@ -387,10 +387,10 @@ static int handle_srm_read(struct srm_client *client,
 
 	*responselen = offsetof(struct srm_return_read, data) + len;
 
-	dbgmsg(DBGMSG_REQUEST, client->ipstr, "%s: READ id=%x file='%s:%s' size=%d "
-		  "actual=%zd offset=%x accesscode=%d, hdr_offset=%zx\n",
-		  __func__, id, MAYBE_NULL(entry, volume->name), MAYBE_NULL(entry, filename->str),
-		  requested, len, offset, acc, entry->hdr_offset);
+	dbgmsg(DBGMSG_REQUEST, client->ipstr, "READ id=%x file='%s:%s' size=%d "
+	       "actual=%zd offset=%x accesscode=%d, hdr_offset=%zx\n",
+	       id, MAYBE_NULL(entry, volume->name), MAYBE_NULL(entry, filename->str),
+	       requested, len, offset, acc, entry->hdr_offset);
 	return len != requested ? SRM_ERRNO_EOF_ENCOUNTERED : 0;
 }
 
@@ -489,7 +489,7 @@ static int handle_srm_set_eof(struct srm_client *client,
 	if (ftruncate(entry->fd, pos) == -1)
 		return errno_to_srm_error(client);
 	srm_update_file_header(client, entry);
-	dbgmsg(DBGMSG_FILE, client->ipstr, "%s: SET EOF: relative=%d pos=%08lx\n", __func__,
+	dbgmsg(DBGMSG_FILE, client->ipstr, "SET EOF: relative=%d pos=%08lx\n",
 		  whence, pos + 1);
 	return 0;
 }
@@ -660,8 +660,8 @@ static int handle_srm_fileinfo(struct srm_client *client,
 	if (get_file_info(client, entry->volume, entry->filename->str, &response->fi) == -1)
 		return errno_to_srm_error(client);
 
-	dbgmsg(DBGMSG_REQUEST, client->ipstr, "%s: FILEINFO id=%08x file='%s:%s'\n",
-		  __func__, id, MAYBE_NULL(entry, volume->name), MAYBE_NULL(entry, filename->str));
+	dbgmsg(DBGMSG_REQUEST, client->ipstr, "FILEINFO id=%08x file='%s:%s'\n",
+		  id, MAYBE_NULL(entry, volume->name), MAYBE_NULL(entry, filename->str));
 	*responselen = sizeof(struct srm_return_fileinfo);
 	return 0;
 }
@@ -685,8 +685,8 @@ static int handle_srm_close(struct srm_client *client,
 		if (srm_volume_unlink_file(client, entry->volume, entry->filename->str) == -1)
 			error = errno_to_srm_error(client);
 	}
-	dbgmsg(DBGMSG_REQUEST, client->ipstr, "%s: CLOSE %08x file='%s:%s' nodeallocate %d error %d\n",
-		  __func__, id, MAYBE_NULL(entry, volume->name), MAYBE_NULL(entry, filename->str), nodeallocate, error);
+	dbgmsg(DBGMSG_REQUEST, client->ipstr, "CLOSE %08x file='%s:%s' nodeallocate %d error %d\n",
+		 id, MAYBE_NULL(entry, volume->name), MAYBE_NULL(entry, filename->str), nodeallocate, error);
 	g_tree_remove(open_files, entry->filename);
 	g_tree_remove(client->files, &id);
 	return error;
@@ -930,9 +930,9 @@ static int handle_srm_open(struct srm_client *client,
 	if (!error)
 		response->file_id = htonl(client_insert_file_entry(client, volume, filename, fd, hdr_offset, filetype));
 error:
-	dbgmsg(DBGMSG_REQUEST, client->ipstr, "%s: OPEN file='%s:%s' fd=%d id=%08x hdrsz=%ld error=%d\n",
-		  __func__, MAYBE_NULL(volume, name), MAYBE_NULL(filename, str), fd,
-		  ntohl(response->file_id), hdr_offset, error);
+	dbgmsg(DBGMSG_REQUEST, client->ipstr, "OPEN file='%s:%s' fd=%d id=%08x hdrsz=%ld error=%d\n",
+	       MAYBE_NULL(volume, name), MAYBE_NULL(filename, str), fd,
+	       ntohl(response->file_id), hdr_offset, error);
 	if (filename && error)
 		g_string_free(filename, TRUE);
 	*responselen = sizeof(*response);
@@ -1033,10 +1033,9 @@ static int handle_srm_catalog(struct srm_client *client,
 		break;
 	}
 error:
-	dbgmsg(DBGMSG_REQUEST, client->ipstr, "%s: CAT '%s:%s' start=%d max=%d wd=%x results=%d error=%d\n",
-		  __func__, MAYBE_NULL(filename, str), MAYBE_NULL(volume, name),
-		  start, max, ntohl(request->fh.working_directory),
-		  cnt, error);
+	dbgmsg(DBGMSG_REQUEST, client->ipstr, "CAT '%s:%s' start=%d max=%d wd=%x results=%d error=%d\n",
+	       MAYBE_NULL(filename, str), MAYBE_NULL(volume, name), start, max,
+	       ntohl(request->fh.working_directory), cnt, error);
 	if (filename)
 		g_string_free(filename, TRUE);
 	*responselen = sizeof(*response);
@@ -1145,8 +1144,8 @@ static int handle_srm_createfile(struct srm_client *client,
 error:
 	if (fd != -1)
 		close(fd);
-	dbgmsg(DBGMSG_REQUEST, client->ipstr, "%s: CREATE FILE: file='%s:%s' type=%d error=%d\n",
-		  __func__, MAYBE_NULL(volume, name), MAYBE_NULL(filename, str), type, error);
+	dbgmsg(DBGMSG_REQUEST, client->ipstr, "CREATE FILE: file='%s:%s' type=%d error=%d\n",
+		  MAYBE_NULL(volume, name), MAYBE_NULL(filename, str), type, error);
 	if (filename)
 		g_string_free(filename, TRUE);
 	return error;
@@ -1185,11 +1184,9 @@ static int handle_srm_create_link(struct srm_client *client,
 
 	error = err ? errno_to_srm_error(client) : 0;
 error:
-	dbgmsg(DBGMSG_REQUEST, client->ipstr, "%s: CREATELINK %s:%s -> %s, purge %d, error %d\n", __func__,
-		  MAYBE_NULL(volume, name),
-		  MAYBE_NULL(old_filename, str),
-		  MAYBE_NULL(new_filename, str),
-		  purge, error);
+	dbgmsg(DBGMSG_REQUEST, client->ipstr, "CREATE LINK %s:%s -> %s, purge %d, error %d\n",
+	       MAYBE_NULL(volume, name), MAYBE_NULL(old_filename, str),
+	       MAYBE_NULL(new_filename, str), purge, error);
 	if (old_filename)
 		g_string_free(old_filename, TRUE);
 	if (new_filename)
@@ -1221,8 +1218,8 @@ static int handle_srm_volstatus(struct srm_client *client,
 			response->freesize = htonl(MIN(INT_MAX, bytesfree));
 		}
 	}
-	dbgmsg(DBGMSG_REQUEST, client->ipstr, "%s: VOLSTATUS vname='%s' error=%d\n",
-		  __func__, MAYBE_NULL(volume, name), error);
+	dbgmsg(DBGMSG_REQUEST, client->ipstr, "VOLSTATUS vname='%s' error=%d\n",
+	       MAYBE_NULL(volume, name), error);
 	return error;
 }
 
@@ -1254,8 +1251,8 @@ static int handle_srm_purgelink(struct srm_client *client,
 			error = errno_to_srm_error(client);
 	}
 error:
-	dbgmsg(DBGMSG_REQUEST, client->ipstr, "%s: PURGE LINK '%s:%s' error=%d\n",
-		  __func__, MAYBE_NULL(volume, name), MAYBE_NULL(filename, str), error);
+	dbgmsg(DBGMSG_REQUEST, client->ipstr, "PURGE LINK '%s:%s' error=%d\n",
+	       MAYBE_NULL(volume, name), MAYBE_NULL(filename, str), error);
 	g_string_free(filename, TRUE);
 	return error;
 }
@@ -1294,7 +1291,7 @@ static int handle_srm_xchg_open(struct srm_client *client,
 	entry2->fd = entry1->fd;
 	entry1->fd = fd;
 
-	dbgmsg(DBGMSG_REQUEST, client->ipstr, "%s: XCHG OPEN\n", __func__);
+	dbgmsg(DBGMSG_REQUEST, client->ipstr, "XCHG OPEN id1=%x id2=%x\n", id1, id2);
 	return 0;
 }
 
