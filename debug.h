@@ -20,6 +20,7 @@ typedef enum {
 struct srm_client;
 
 void dbgmsg(int level, const char *prefix, const char *fmt, ...) __attribute__ ((format (printf, 3, 4)));
+void vdbgmsg(int level, const char *prefix, const char *fmt, va_list ap);
 
 void hexdump(int level, char *ipstr,
 	     char *prefix, void *buf, size_t len);

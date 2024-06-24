@@ -41,10 +41,9 @@ void hexdump(int level, char *ipstr, char *prefix, void *buf, size_t len)
 	}
 }
 
-void dbgmsg(int level, const char *prefix, const char *fmt, ...)
+void vdbgmsg(int level, const char *prefix, const char *fmt, va_list ap)
 {
 	GString *msg;
-	va_list ap;
 
 	if ((level != DBGMSG_ERROR) && !(config.debug & level))
 		return;
@@ -52,13 +51,20 @@ void dbgmsg(int level, const char *prefix, const char *fmt, ...)
 	msg = g_string_sized_new(128);
 	if (prefix)
 		g_string_append_printf(msg, "[%15.15s] ", prefix);
-	va_start(ap, fmt);
 	g_string_append_vprintf(msg, fmt, ap);
-	va_end(ap);
 
 	if (config.foreground)
 		fprintf(stderr, "%s", msg->str);
 	else
 		syslog(LOG_INFO, "%s", msg->str);
 	g_string_free(msg, TRUE);
+}
+
+void dbgmsg(int level, const char *prefix, const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	vdbgmsg(level, prefix, fmt, ap);
+	va_end(ap);
 }
