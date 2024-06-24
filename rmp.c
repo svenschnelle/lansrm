@@ -205,11 +205,7 @@ static void rmp_handle_done_req(struct client_config *client)
 
 static void handle_rmp_packet(struct rmp_epoll_ctx *ctx, struct client_config *client)
 {
-	struct rmp_packet *packet = ctx->inbuf;
 	struct rmp_raw *raw = ctx->inbuf + sizeof(struct rmp_packet);
-
-	if (packet->dsap != IEEE_DSAP_HP || packet->ssap != IEEE_SSAP_HP)
-		return;
 
 	switch (raw->rmp_type) {
 	case RMP_BOOT_REQ:
@@ -242,7 +238,12 @@ static int rmp_handle_fd(int fd, struct epoll_event *ev, void *arg)
 		if (len == -1 && errno != EAGAIN)
 			return -1;
 		if (len > 2) {
+			struct rmp_packet *packet = ctx->inbuf;
 			ctx->inlen = len;
+
+			if (packet->dsap != IEEE_DSAP_HP || packet->ssap != IEEE_SSAP_HP)
+				return 0;
+
 			config = get_client_config_hwaddr(ctx->addr.sll_addr);
 			if (!config || !config->bootfiles || !config->bootpath) {
 				dbgmsg(DBGMSG_ERROR, NULL, "no config for client %02x:%02x:%02x:%02x:%02x:%02x\n",
