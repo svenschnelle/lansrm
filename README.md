@@ -33,7 +33,7 @@ node=0
 hostip=172.16.1.1
 
 # list of volumes available to all clients
-volumes=SYSTEMS;BOOT
+volumes=SYSTEMS;SRM
 
 # accept clients who didn't send a SRM_CONNECT request?
 accept_unknown=1
@@ -46,23 +46,39 @@ accept_unknown=1
 # volume configuration
 [SYSTEMS]
 # volume index
-volume=0
+volume=10
 
 # path on filesystem below chroot path above
 path=/SYSTEMS
 
-[BOOT]
-volume=8
-path=/BOOT
+# permissions
+umask=027
 
-[HP340]
-volume=1
-path=/HP340
+[SRM]
+volume=8
+path=/SRM
+uid=srm
+gid=srmusers
+
+[USER]
+volume=9
+path=/user
 
 # SRM client configuration
 [172.16.1.2]
 # list of volumes available in addition to global list
-volumes=HP340
+volumes=USER
+
 # SRM node ID of the client
+hostnode=0
 node=1
+
+# volume where boot files reside
+bootpath=SRM:/SYSTEMS
+
+# visible bootfiles 
+bootfiles=SYSTEM_P;SYSTEM_B64
+
+# map temp directory to /tmp
+tempdir = /tmp
 ```
