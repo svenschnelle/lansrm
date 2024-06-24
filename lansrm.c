@@ -113,12 +113,12 @@ int main(int argc, char **argv)
 	read_client_configs();
 	if (signal(SIGTERM, sighandler) == SIG_ERR) {
 		perror("error registering SIGTERM handler\n");
-		return 1;
+		goto error;
 	}
 
 	if (signal(SIGINT, sighandler) == SIG_ERR) {
 		perror("error registering SIGINT handler\n");
-		return 1;
+		goto error;
 	}
 
 	if (!config.root)
@@ -128,28 +128,32 @@ int main(int argc, char **argv)
 	clients = g_tree_new_full(client_compare, NULL, NULL, client_destroy);
 
 	if (epoll_init() == -1)
-		return 1;
+		goto error;
 
 	if (srm_init(clients) == -1)
-		return 1;
+		goto error;
 
 	if (rmp_init(clients) == -1)
-		return 1;
+		goto error;
 
 	if (!config.foreground && daemon(0, 0) == -1) {
 		perror("daemon");
-		return 1;
+		goto error;
 	}
 
 	if (config.chroot && chroot(config.chroot) == -1) {
 		perror("chroot: %m\n");
-		return 1;
+		goto error;
 	}
 	if (chdir("/") == -1) {
 		perror("chdir");
-		return 1;
+		goto error;
 	}
 	ret = epoll_loop();
+error:
+	srm_exit();
+	rmp_exit();
+	epoll_exit();
 	g_tree_destroy(clients);
 	config_free(&config);
 	return ret;

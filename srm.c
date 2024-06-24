@@ -1602,34 +1602,14 @@ size_t srm_handle_request(struct srm_client *client,
 
 static int srm_send(struct srm_client *client, struct srm_epoll_ctx *ctx, struct sockaddr_in *addr)
 {
-	ssize_t ret;
-	char *ipstr = client ? client->ipstr : "";
 	if (!addr)
 		addr = &bcaddr;
 
-	dbgmsg(DBGMSG_RESPONSE, ipstr, "sending %zd bytes\n", ctx->outlen);
-	ret = sendto(ctx->fd, ctx->outbuf, ctx->outlen, 0,
-		     (struct sockaddr *)addr, sizeof(*addr));
-	if (ret == -1) {
-		if (errno != EAGAIN) {
-			dbgmsg(DBGMSG_ERROR, client->ipstr, "sendto: %m\n");
-			return -1;
-		}
-
-		if (epoll_set_events(ctx->fdctx, EPOLLOUT) == -1) {
-			dbgmsg(DBGMSG_ERROR, client->ipstr, "epoll_set_events: %m\n");
-			return -1;
-		}
-		return 0;
-	}
-
-	if (ret != ctx->outlen) {
-		dbgmsg(DBGMSG_ERROR, ipstr, "sendto: only wrote %zd out of %zd bytes\n",
-			  ret, ctx->outlen);
-		return -1;
-	}
+	dbgmsg(DBGMSG_RESPONSE, MAYBE_NULL(client, ipstr), "sending %zd bytes\n", ctx->outlen);
+	if (epoll_sendto(ctx->fdctx,  ctx->outbuf, ctx->outlen,
+			 (struct sockaddr *)addr, sizeof(*addr)) == -1)
+	    return -1;
 	ctx->outlen = 0;
-	epoll_clear_events(ctx->fdctx, EPOLLOUT);
 	return 0;
 }
 
@@ -1782,8 +1762,7 @@ static void srm_reject_client_xfer(struct srm_epoll_ctx *ctx, char *name)
 	srm_send(NULL, ctx, &ctx->addr);
 }
 
-static void srm_reject_client_connect(struct srm_epoll_ctx *ctx, char *name,
-				      struct sockaddr_in *addr)
+static void srm_reject_client_connect(struct srm_epoll_ctx *ctx, char *name)
 {
 	struct srm_connect_request *request = ctx->inbuf;
 	struct srm_connect_reply *reply = ctx->outbuf;
@@ -1796,8 +1775,7 @@ static void srm_reject_client_connect(struct srm_epoll_ctx *ctx, char *name,
 	srm_send(NULL, ctx, NULL);
 }
 
-static void handle_srm_connect(struct srm_epoll_ctx *ctx, char *ipstr,
-			       struct sockaddr_in *addr)
+static void handle_srm_connect(struct srm_epoll_ctx *ctx, char *ipstr)
 {
 	struct srm_connect_request *req = ctx->inbuf;
 	struct srm_connect_reply *reply = ctx->outbuf;
@@ -1817,7 +1795,7 @@ static void handle_srm_connect(struct srm_epoll_ctx *ctx, char *ipstr,
 		  hwaddr_string, ipstr);
 
 	if (!client) {
-		srm_reject_client_connect(ctx, hwaddr_string, addr);
+		srm_reject_client_connect(ctx, hwaddr_string);
 		return;
 	}
 
@@ -1859,7 +1837,7 @@ static void handle_rx(struct srm_epoll_ctx *ctx)
 			dbgmsg(DBGMSG_ERROR, NULL, "short srm request: %zd bytes\n", len);
 			break;
 		}
-		handle_srm_connect(ctx, ipstr, &ctx->addr);
+		handle_srm_connect(ctx, ipstr);
 		break;
 
 	case SRM_REQUEST_XFER:
@@ -1981,6 +1959,13 @@ static int srm_create_socket(char *dev)
 	return fd;
 }
 
+static void srm_cleanup_fd(void *_ctx)
+{
+	struct srm_epoll_ctx *ctx = _ctx;
+
+	dbgmsg(DBGMSG_EPOLL, NULL, "%s: %p\n", __func__, ctx);
+}
+
 int srm_init(GTree *clients)
 {
 
@@ -1994,7 +1979,8 @@ int srm_init(GTree *clients)
 	if (fd == -1)
 		return -1;
 	srmctx = srm_create_epoll_ctx(clients, fd);
-	srmctx->fdctx = epoll_add(fd, EPOLLIN|EPOLLERR, srm_handle_fd, srmctx);
+	srmctx->fdctx = epoll_add(fd, EPOLLIN|EPOLLERR, srm_handle_fd,
+				  srm_cleanup_fd, srmctx);
 	if (!srmctx->fdctx) {
 		dbgmsg(DBGMSG_ERROR, NULL, "%s: epoll_add: %m\n", __func__);
 		return -1;

@@ -48,32 +48,9 @@ int create_rmp_socket(char *dev)
 
 static int rmp_send(struct rmp_epoll_ctx *ctx, struct sockaddr_ll *addr)
 {
-	ssize_t ret;
-
 	dbgmsg(DBGMSG_RESPONSE, NULL, "sending %zd bytes\n", ctx->outlen);
-	ret = sendto(ctx->fd, ctx->outbuf, ctx->outlen, 0,
-		     (struct sockaddr *)addr, sizeof(*addr));
-	if (ret == -1) {
-		if (errno != EAGAIN) {
-			dbgmsg(DBGMSG_ERROR, NULL, "sendto: %m\n");
-			return -1;
-		}
-
-		if (epoll_set_events(ctx->fdctx, EPOLLOUT) == -1) {
-			dbgmsg(DBGMSG_ERROR, NULL, "epoll_set_events: %m\n");
-			return -1;
-		}
-		return 0;
-	}
-
-	if (ret != ctx->outlen) {
-		dbgmsg(DBGMSG_ERROR, NULL, "sendto: only wrote %zd out of %zd bytes\n",
-			  ret, ctx->outlen);
-		return -1;
-	}
-	ctx->outlen = 0;
-	epoll_clear_events(ctx->fdctx, EPOLLOUT);
-	return 0;
+	return epoll_sendto(ctx->fdctx, ctx->outbuf, ctx->outlen,
+			    (struct sockaddr *)addr, sizeof(*addr));
 }
 
 static void rmp_boot_request_open(struct client_config *client,
@@ -335,6 +312,13 @@ static int rmp_create_socket(char *dev)
 	return fd;
 }
 
+static void rmp_cleanup_fd(void *_ctx)
+{
+	struct rmp_epoll_ctx *ctx = _ctx;
+
+	dbgmsg(DBGMSG_EPOLL, NULL, "%s: %p\n", __func__, ctx);
+}
+
 int rmp_init(GTree *clients)
 {
 	int fd;
@@ -343,7 +327,8 @@ int rmp_init(GTree *clients)
 	if (fd == -1)
 		return -1;
 	rmpctx = rmp_create_epoll_ctx(clients, fd);
-	rmpctx->fdctx = epoll_add(fd, EPOLLIN|EPOLLERR, rmp_handle_fd, rmpctx);
+	rmpctx->fdctx = epoll_add(fd, EPOLLIN|EPOLLERR, rmp_handle_fd,
+				  rmp_cleanup_fd, rmpctx);
 	if (!rmpctx->fdctx) {
 		dbgmsg(DBGMSG_ERROR, NULL, "%s: epoll_add: %m\n", __func__);
 		return -1;

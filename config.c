@@ -70,6 +70,7 @@ static void client_config_free(struct client_config *client)
 	g_list_free(client->volumes);
 	g_strfreev(client->bootfiles);
 	g_free(client->bootpath);
+	g_free(client->tempdir);
 	g_free(client);
 }
 
