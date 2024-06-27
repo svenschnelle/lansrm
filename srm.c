@@ -459,8 +459,9 @@ static int handle_srm_position(struct srm_client *client,
 	struct open_file_entry *entry;
 	uint32_t id, offset;
 	uint8_t whence;
+	int error = 0;
 	off_t curpos;
-	int error;
+
 
 	offset = ntohl(request->offset);
 	whence = request->position_type ? SEEK_CUR : SEEK_SET;
