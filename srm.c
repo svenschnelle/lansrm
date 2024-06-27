@@ -359,7 +359,7 @@ static int srm_volume_open_file(struct srm_client *client,
 
 	if (srm_drop_privs(client, volume) == -1)
 		return -1;
-	fd = open(filename, flags, 0777);
+	fd = open(filename, flags, 0666);
 	if (srm_restore_privs(client, volume) == -1)
 		return -1;
 	return fd;
