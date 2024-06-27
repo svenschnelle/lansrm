@@ -167,8 +167,10 @@ int epoll_loop(void)
 	while(!shouldexit) {
 		nfds = epoll_wait(efd, events, ARRAY_SIZE(events), 1000);
 		if (nfds == -1) {
-			if (errno != EINTR)
+			if (errno != EINTR) {
 				dbgmsg(DBGMSG_ERROR, NULL, "epoll_wait failed: %m\n");
+				continue;
+			}
 			goto err;
 		}
 
