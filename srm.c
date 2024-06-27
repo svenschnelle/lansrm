@@ -537,7 +537,7 @@ error:
 	dbgmsg(DBGMSG_REQUEST, client->ipstr, "READ id=%x file='%s:%s' size=%d "
 	       "actual=%zd offset=%x accesscode=%d, hdr_offset=%zx\n",
 	       id, MAYBE_NULL(entry, volume->name), MAYBE_NULL(entry, filename->str),
-	       requested, len, offset, acc, entry->hdr_offset);
+	       requested, len, offset, acc, entry ? entry->hdr_offset : 0);
 	return error;
 }
 
