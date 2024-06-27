@@ -277,6 +277,8 @@ static struct rmp_epoll_ctx *rmp_create_epoll_ctx(GTree *clients, int fd)
 
 static void rmp_destroy_epoll_ctx(struct rmp_epoll_ctx *ctx)
 {
+	if (!ctx)
+		return;
 	g_free(ctx->inbuf);
 	g_free(ctx->outbuf);
 	g_free(ctx);

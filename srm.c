@@ -1937,6 +1937,8 @@ static struct srm_epoll_ctx *srm_create_epoll_ctx(GTree *clients, int fd)
 
 static void srm_destroy_epoll_ctx(struct srm_epoll_ctx *ctx)
 {
+	if (!ctx)
+		return;
 	g_free(ctx->inbuf);
 	g_free(ctx->outbuf);
 	g_free(ctx);
@@ -2016,6 +2018,7 @@ int srm_init(GTree *clients)
 
 void srm_exit(void)
 {
-	g_tree_destroy(open_files);
+	if (open_files)
+		g_tree_destroy(open_files);
 	srm_destroy_epoll_ctx(srmctx);
 }
