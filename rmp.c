@@ -81,12 +81,12 @@ static void rmp_boot_request_open(struct client_config *client,
 	}
 	g_string_append_len(filename, request->filename, request->filenamesize);
 	strip_dup_slashes(filename);
-	dbgmsg(DBGMSG_ERROR, NULL, "%s: %s\n", __func__, filename->str);
+
 	if (client->bootfilefd != -1)
 		close(client->bootfilefd);
 	client->bootfilefd = open(filename->str, O_RDONLY);
 	if (client->bootfilefd == -1) {
-		dbgmsg(DBGMSG_ERROR, NULL, "open %s: %m\n", filename->str);
+		dbgmsg(DBGMSG_REQUEST, NULL, "open %s: %m\n", filename->str);
 		reply->retcode = RMP_E_NOFILE;
 	} else {
 		memcpy(reply->filename, request->filename, request->filenamesize);
