@@ -125,6 +125,6 @@ struct rmp_epoll_ctx {
 };
 
 int create_rmp_socket(char *dev);
-int rmp_init(GTree *clients);
+void rmp_init(GTree *clients);
 void rmp_exit(void);
 #endif

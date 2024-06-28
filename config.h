@@ -3,10 +3,15 @@
 
 #include <glib.h>
 
+struct ifcfg {
+	struct sockaddr_in addr;
+	char *name;
+};
+
 struct config {
 	GList *configs;
 	GKeyFile *keyfile;
-	char *interface;
+	GList *interfaces;
 	char *chroot;
 	char *root;
 	int foreground;
@@ -30,6 +35,7 @@ struct srm_volume {
 struct client_config *get_client_config(struct sockaddr_in *addr);
 struct client_config *get_client_config_hwaddr(uint8_t *hwaddr);
 void config_free(struct config *c);
+void config_init(void);
 void read_client_configs(void);
 struct srm_volume *volume_by_name(struct client_config *client, const char *name);
 void strip_dup_slashes(GString *s);

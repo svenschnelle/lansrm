@@ -25,7 +25,6 @@ static int client_compare(const void *a, const void *b, void *data)
 static void usage(char *name)
 {
 	printf("%s: usage:\n"
-	       "-i, --interface <interface>  listen on interface <interface>\n"
 	       "-f, --foreground             don't fork into background\n"
 	       "-c, --chroot <directory>     chroot to <directory>\n"
 	       "-r, --root <directory>       use <directory> as base for SRM files\n"
@@ -75,21 +74,16 @@ int main(int argc, char **argv)
 	config.keyfile = g_key_file_new();
 	if (g_key_file_load_from_file(config.keyfile, "/etc/srm.ini", G_KEY_FILE_NONE, &gerr)) {
 		config.debug = g_key_file_get_integer(config.keyfile, "global", "debug", NULL);
-		config.interface = g_key_file_get_string(config.keyfile, "global", "interface", NULL);
 		config.chroot = g_key_file_get_string(config.keyfile, "global", "chroot", NULL);
 		config.root = g_key_file_get_string(config.keyfile, "global", "root", NULL);
 		config.foreground = g_key_file_get_boolean(config.keyfile, "global", "foreground", NULL);
 	}
 
 	for (;;) {
-		char c = getopt_long(argc, argv, "i:d:fhcr:", longopts, &longind);
+		char c = getopt_long(argc, argv, "d:fhcr:", longopts, &longind);
 		if (c == -1)
 			break;
 		switch(c) {
-		case 'i':
-			g_free(config.interface);
-			config.interface = strdup(optarg);
-			break;
 		case 'd':
 			config.debug = strtoul(optarg, NULL, 0);
 			break;
@@ -109,6 +103,8 @@ int main(int argc, char **argv)
 			return 0;
 		}
 	}
+
+	config_init();
 
 	read_client_configs();
 	if (signal(SIGTERM, sighandler) == SIG_ERR) {
@@ -130,11 +126,8 @@ int main(int argc, char **argv)
 	if (epoll_init() == -1)
 		goto error;
 
-	if (srm_init(clients) == -1)
-		goto error;
-
-	if (rmp_init(clients) == -1)
-		goto error;
+	srm_init(clients);
+	rmp_init(clients);
 
 	if (!config.foreground && daemon(0, 0) == -1) {
 		perror("daemon");

@@ -10,8 +10,51 @@
 #include "lansrm.h"
 #include "config.h"
 #include "debug.h"
+#include <ifaddrs.h>
+#include <arpa/inet.h>
 
 struct config config;
+
+static void config_interfaces_free(GList *list)
+{
+	for (GList *p = list; p; p = g_list_next(p)) {
+		struct ifcfg *cfg = p->data;
+
+		g_free(cfg->name);
+		g_free(cfg);
+	}
+	g_list_free(list);
+}
+
+static GList *config_get_interfaces(void)
+{
+	struct ifaddrs *p, *iflist;
+	gchar **interfaces;
+	GList *list = NULL;
+	gsize length = 0;
+	struct ifcfg *cfg;
+
+	interfaces = g_key_file_get_string_list(config.keyfile, "global", "interfaces", &length, NULL);
+	if (getifaddrs(&iflist) == -1) {
+		dbgmsg(DBGMSG_CONFIG, NULL, "getifaddrs: %m\n");
+		return NULL;
+	}
+
+	for (p = iflist; p; p = p->ifa_next) {
+		if (length && !g_strv_contains((const gchar **)interfaces, p->ifa_name))
+			continue;
+		if (p->ifa_addr->sa_family != AF_INET)
+			continue;
+		dbgmsg(DBGMSG_CONFIG, NULL, "iface: %s\n", p->ifa_name);
+		cfg = g_new0(struct ifcfg, 1);
+		cfg->name = g_strdup(p->ifa_name);
+		memcpy(&cfg->addr, p->ifa_addr, sizeof(cfg->addr));
+		list = g_list_append(list, cfg);
+	}
+	freeifaddrs(iflist);
+	g_strfreev(interfaces);
+	return list;
+}
 
 void strip_dup_slashes(GString *s)
 {
@@ -244,12 +287,17 @@ void read_client_configs(void)
 	g_strfreev(groups);
 }
 
+void config_init(void)
+{
+	config.interfaces = config_get_interfaces();
+}
+
 void config_free(struct config *c)
 {
 	g_key_file_free(c->keyfile);
 	g_free(c->chroot);
 	g_free(c->root);
-	g_free(c->interface);
+	config_interfaces_free(c->interfaces);
 	for (GList *p = c->configs; p; p = g_list_next(p))
 		client_config_free(p->data);
 	g_list_free(c->configs);

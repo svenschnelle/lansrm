@@ -13,7 +13,7 @@
 #include "debug.h"
 #include "config.h"
 
-static struct rmp_epoll_ctx *rmpctx;
+static GList *rmpctx_list;
 
 int create_rmp_socket(char *dev)
 {
@@ -285,7 +285,7 @@ static void rmp_destroy_epoll_ctx(struct rmp_epoll_ctx *ctx)
 }
 
 
-static int rmp_create_socket(char *dev)
+static int rmp_create_socket(struct ifcfg *iface)
 {
 	int fd, on = 1;
 
@@ -301,7 +301,7 @@ static int rmp_create_socket(char *dev)
 		return -1;
 	}
 
-	if (dev && setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, dev, strlen(dev)) == -1) {
+	if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, iface->name, strlen(iface->name)) == -1) {
 		dbgmsg(DBGMSG_ERROR, NULL, "failed to set SO_BINDTODEVICE: %m\n");
 		close(fd);
 		return -1;
@@ -322,24 +322,35 @@ static void rmp_cleanup_fd(void *_ctx)
 	dbgmsg(DBGMSG_EPOLL, NULL, "%s: %p\n", __func__, ctx);
 }
 
-int rmp_init(GTree *clients)
+void rmp_init(GTree *clients)
 {
+	struct rmp_epoll_ctx *rmpctx;
 	int fd;
 
-	fd = rmp_create_socket(config.interface);
-	if (fd == -1)
-		return -1;
-	rmpctx = rmp_create_epoll_ctx(clients, fd);
-	rmpctx->fdctx = epoll_add(fd, EPOLLIN|EPOLLERR, rmp_handle_fd,
-				  rmp_cleanup_fd, rmpctx);
-	if (!rmpctx->fdctx) {
-		dbgmsg(DBGMSG_ERROR, NULL, "%s: epoll_add: %m\n", __func__);
-		return -1;
+	for (GList *p = config.interfaces; p; p = g_list_next(p)) {
+		struct ifcfg *iface = p->data;
+
+		fd = rmp_create_socket(iface);
+		if (fd == -1) {
+			dbgmsg(DBGMSG_ERROR, NULL, "iface %s: socket: %m\n", iface->name);
+			continue;
+		}
+		rmpctx = rmp_create_epoll_ctx(clients, fd);
+		rmpctx->fdctx = epoll_add(fd, EPOLLIN|EPOLLERR, rmp_handle_fd,
+					  rmp_cleanup_fd, rmpctx);
+		if (!rmpctx->fdctx) {
+			dbgmsg(DBGMSG_ERROR, NULL, "%s: epoll_add: %m\n", __func__);
+			close(fd);
+			continue;
+		}
+		rmpctx_list = g_list_append(rmpctx_list, rmpctx);
+		dbgmsg(DBGMSG_EPOLL, NULL, "%s/rmp: listening\n", iface->name);
 	}
-	return 0;
 }
 
 void rmp_exit(void)
 {
-	rmp_destroy_epoll_ctx(rmpctx);
+	for (GList *p = rmpctx_list; p; p = g_list_next(p))
+		rmp_destroy_epoll_ctx(p->data);
+	g_list_free(rmpctx_list);
 }

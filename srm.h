@@ -428,6 +428,6 @@ size_t srm_handle_request(struct srm_client *client,
 			  struct srm_request_packet *request,
 			  struct srm_response_packet *response);
 
-int srm_init(GTree *clients);
+void srm_init(GTree *clients);
 void srm_exit(void);
 #endif /* SRM_H */

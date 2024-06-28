@@ -26,7 +26,7 @@
 #define MAYBE_NULL(p, member) ((p) ? (p)->member : "")
 
 static struct sockaddr_in bcaddr;
-static struct srm_epoll_ctx *srmctx;
+static GList *srmctx_list;
 static GTree *open_files;
 
 struct srm_epoll_ctx {
@@ -34,8 +34,8 @@ struct srm_epoll_ctx {
 	GTree *clients;
 	void *inbuf;
 	void *outbuf;
-	struct sockaddr_in addr;
-	socklen_t addrlen;
+	struct sockaddr_in hostaddr;
+	struct sockaddr_in clientaddr;
 	ssize_t inlen;
 	ssize_t outlen;
 	int fd;
@@ -1694,45 +1694,27 @@ static int srm_connect_fill_ip_node(struct srm_connect_reply *reply,
 				    struct srm_client *client,
 				    char *hwaddr_string)
 {
-	struct in_addr clientaddr, hostaddr;
+	struct in_addr clientaddr;
 	gchar *tmp;
 	int ret;
 
-	if (hwaddr_string) {
-		tmp = g_key_file_get_string(config.keyfile, "global", hwaddr_string, NULL);
-		if (!tmp) {
-			dbgmsg(DBGMSG_CONNECT, client->ipstr, "unknown client %s\n", hwaddr_string);
-			return -1;
-		}
-		ret = inet_pton(AF_INET, tmp, &clientaddr);
-		if (ret != 1) {
-			dbgmsg(DBGMSG_FILE, client->ipstr, "Failed to parse IP %s\n", tmp);
-			g_free(tmp);
-			return -1;
-		}
-		client->addr.sin_addr.s_addr = clientaddr.s_addr;
-		client->ipstr = g_strdup(tmp);
-		g_free(tmp);
-	}
-
-	tmp = g_key_file_get_string(config.keyfile, "global", "hostip", NULL);
+	tmp = g_key_file_get_string(config.keyfile, "global", hwaddr_string, NULL);
 	if (!tmp) {
-		dbgmsg(DBGMSG_CONNECT, client->ipstr, "no hostip set in global section\n");
+		dbgmsg(DBGMSG_CONNECT, client->ipstr, "unknown client %s\n", hwaddr_string);
 		return -1;
 	}
-	ret = inet_pton(AF_INET, tmp, &hostaddr);
-	g_free(tmp);
+	ret = inet_pton(AF_INET, tmp, &clientaddr);
 	if (ret != 1) {
 		dbgmsg(DBGMSG_FILE, client->ipstr, "Failed to parse IP %s\n", tmp);
 		g_free(tmp);
 		return -1;
 	}
+	client->addr.sin_addr.s_addr = clientaddr.s_addr;
+	client->ipstr = g_strdup(tmp);
+	g_free(tmp);
 
-	if (reply) {
-		reply->my_ip = clientaddr.s_addr;
-		reply->host_ip = hostaddr.s_addr;
-		reply->my_node = htons(g_key_file_get_integer(config.keyfile, client->ipstr, "node", NULL));
-	}
+	reply->my_ip = clientaddr.s_addr;
+	reply->my_node = htons(g_key_file_get_integer(config.keyfile, client->ipstr, "node", NULL));
 	return 0;
 }
 
@@ -1754,13 +1736,13 @@ static void srm_client_free(struct srm_client *client)
 	g_free(client);
 }
 
-static struct srm_client *srm_new_client(GTree *clients, struct sockaddr_in *addr,
-					 socklen_t addrlen, char *hwaddr_string,
-					 struct srm_connect_reply *reply)
+static struct srm_client *srm_new_client(GTree *clients, struct srm_epoll_ctx *ctx,
+					 char *hwaddr_string, struct srm_connect_reply *reply)
 {
 	struct srm_client *client = g_new0(struct srm_client, 1);
 
-	memcpy(&client->addr, addr, addrlen);
+	memcpy(&client->addr, &ctx->clientaddr, sizeof(client->addr));
+	reply->host_ip = ctx->hostaddr.sin_addr.s_addr;
 	if (srm_connect_fill_ip_node(reply, client, hwaddr_string) == -1) {
 		g_free(client);
 		return NULL;
@@ -1785,7 +1767,7 @@ static void srm_reject_client_xfer(struct srm_epoll_ctx *ctx, char *name)
 	request->ret_code = htons(4);
 	request->rec_type = htons(SRM_REPLY_XFER);
 	ctx->outlen = sizeof(*reply);
-	srm_send(NULL, ctx, &ctx->addr);
+	srm_send(NULL, ctx, &ctx->clientaddr);
 }
 
 static void srm_reject_client_connect(struct srm_epoll_ctx *ctx, char *name)
@@ -1814,7 +1796,7 @@ static void handle_srm_connect(struct srm_epoll_ctx *ctx, char *ipstr)
 	snprintf(hwaddr_string, sizeof(hwaddr_string)-1, "%02x:%02x:%02x:%02x:%02x:%02x",
 		 hwaddr[0], hwaddr[1], hwaddr[2], hwaddr[3], hwaddr[4], hwaddr[5]);
 
-	client = srm_new_client(ctx->clients, &ctx->addr, ctx->addrlen, hwaddr_string, reply);
+	client = srm_new_client(ctx->clients, ctx, hwaddr_string, reply);
 	dbgmsg(DBGMSG_CONNECT, client->ipstr, "%s: code=%d, option=%d, node=%d, version=%d, station=%s host=%s\n",
 		  __func__, ntohs(req->ret_code), ntohs(req->option_code),
 		  ntohs(req->host_node), ntohs(req->version),
@@ -1852,7 +1834,7 @@ static void handle_rx(struct srm_epoll_ctx *ctx)
 	char ipstr[INET_ADDRSTRLEN];
 	size_t len = ctx->inlen;
 
-	if (!inet_ntop(AF_INET, &ctx->addr.sin_addr.s_addr, ipstr, ctx->addrlen)) {
+	if (!inet_ntop(AF_INET, &ctx->clientaddr.sin_addr.s_addr, ipstr, sizeof(ctx->clientaddr))) {
 		dbgmsg(DBGMSG_PACKET_RX, NULL, "%s: inet_ntop: %m\n", __func__);
 		return;
 	}
@@ -1871,20 +1853,20 @@ static void handle_rx(struct srm_epoll_ctx *ctx)
 			dbgmsg(DBGMSG_ERROR, NULL, "short srm request: %zd bytes\n", len);
 			break;
 		}
-		client = g_tree_lookup(clients, &ctx->addr);
+		client = g_tree_lookup(clients, &ctx->clientaddr);
 		if (!client) {
 			if (!g_key_file_get_boolean(config.keyfile, "global", "accept_unknown", NULL)) {
 				dbgmsg(DBGMSG_ERROR, client->ipstr, "client without connect: %s\n", ipstr);
 				srm_reject_client_xfer(ctx, ipstr);
 				break;
 			}
-			client = srm_new_client(clients, &ctx->addr, ctx->addrlen, NULL, NULL);
+			client = srm_new_client(clients, ctx, NULL, NULL);
 			if (!client) {
 				srm_reject_client_xfer(ctx, ipstr);
 				break;
 			}
 			client->ipstr = g_strdup(ipstr);
-			memcpy(&client->addr, &ctx->addr, sizeof(struct sockaddr_in));
+			memcpy(&client->addr, &ctx->clientaddr, sizeof(struct sockaddr_in));
 		}
 		handle_srm_xfer(ctx, client, len);
 		if (client->cleanup)
@@ -1904,12 +1886,13 @@ static void handle_rx(struct srm_epoll_ctx *ctx)
 static int srm_handle_fd(int fd, struct epoll_event *ev, void *arg)
 {
 	struct srm_epoll_ctx *ctx = arg;
+	socklen_t addrlen;
 
 	if (ev->events & EPOLLIN) {
 		memset(ctx->inbuf, 0, EPOLL_BUF_SIZE);
-		ctx->addrlen = sizeof(struct sockaddr_in);
+		addrlen = sizeof(struct sockaddr_in);
 		ssize_t len = recvfrom(fd, ctx->inbuf, EPOLL_BUF_SIZE,
-				       0, (struct sockaddr *)&ctx->addr, &ctx->addrlen);
+				       0, (struct sockaddr *)&ctx->clientaddr, &addrlen);
 		if (len == -1 && errno != EAGAIN)
 			return -1;
 		if (len > 2) {
@@ -1945,9 +1928,9 @@ static void srm_destroy_epoll_ctx(struct srm_epoll_ctx *ctx)
 	g_free(ctx);
 }
 
-static int srm_create_socket(char *dev)
+static int srm_create_socket(struct ifcfg *iface)
 {
-	struct sockaddr_in addr = { 0 };
+	struct sockaddr_in addr = { .sin_port = htons(570) };
 	int fd, on = 1;
 
 	fd = socket(AF_INET, SOCK_DGRAM, SOL_UDP);
@@ -1956,17 +1939,13 @@ static int srm_create_socket(char *dev)
 		return -1;
 	}
 
-	addr.sin_addr.s_addr = htonl(INADDR_ANY);
-	addr.sin_port = htons(570);
-	addr.sin_family = AF_INET;
-
 	if (setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &on, sizeof(on)) == -1) {
 		dbgmsg(DBGMSG_ERROR, NULL, "failed to set SO_BROADCAST: %m\n");
 		close(fd);
 		return -1;
 	}
 
-	if (dev && setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, dev, strlen(dev)) == -1) {
+	if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, iface->name, strlen(iface->name)) == -1) {
 		dbgmsg(DBGMSG_ERROR, NULL, "failed to set SO_BINDTODEVICE: %m\n");
 		close(fd);
 		return -1;
@@ -1994,32 +1973,44 @@ static void srm_cleanup_fd(void *_ctx)
 	dbgmsg(DBGMSG_EPOLL, NULL, "%s: %p\n", __func__, ctx);
 }
 
-int srm_init(GTree *clients)
+void srm_init(GTree *clients)
 {
-
+	struct srm_epoll_ctx *srmctx;
 	int fd;
 
 	bcaddr.sin_family = AF_INET;
 	bcaddr.sin_port = htons(570);
 	bcaddr.sin_addr.s_addr = htonl(INADDR_BROADCAST);
 
-	fd = srm_create_socket(config.interface);
-	if (fd == -1)
-		return -1;
-	srmctx = srm_create_epoll_ctx(clients, fd);
-	srmctx->fdctx = epoll_add(fd, EPOLLIN|EPOLLERR, srm_handle_fd,
-				  srm_cleanup_fd, srmctx);
-	if (!srmctx->fdctx) {
-		dbgmsg(DBGMSG_ERROR, NULL, "%s: epoll_add: %m\n", __func__);
-		return -1;
+	for (GList *p = config.interfaces; p; p = g_list_next(p)) {
+		struct ifcfg *iface = p->data;
+
+		fd = srm_create_socket(iface);
+		if (fd == -1) {
+			dbgmsg(DBGMSG_ERROR, NULL, "iface %s: socket: %m\n", iface->name);
+			continue;
+		}
+
+		srmctx = srm_create_epoll_ctx(clients, fd);
+		srmctx->fdctx = epoll_add(fd, EPOLLIN|EPOLLERR, srm_handle_fd,
+					  srm_cleanup_fd, srmctx);
+		memcpy(&srmctx->hostaddr, &iface->addr, sizeof(srmctx->hostaddr));
+		if (!srmctx->fdctx) {
+			dbgmsg(DBGMSG_ERROR, NULL, "%s: epoll_add: %m\n", __func__);
+			close(fd);
+			continue;
+		}
+		srmctx_list = g_list_append(srmctx_list, srmctx);
+		dbgmsg(DBGMSG_EPOLL, NULL, "%s/srm: listening\n", iface->name);
 	}
 	open_files = g_tree_new(srm_open_files_compare);
-	return 0;
 }
 
 void srm_exit(void)
 {
 	if (open_files)
 		g_tree_destroy(open_files);
-	srm_destroy_epoll_ctx(srmctx);
+	for (GList *p = srmctx_list; p; p = g_list_next(p))
+		srm_destroy_epoll_ctx(p->data);
+	g_list_free(srmctx_list);
 }

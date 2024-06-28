@@ -23,14 +23,11 @@ debug=1
 # paths are below this path)
 chroot=/srm
 
-# interface to listen on for srm requests
-interface=eth0
+# interfaces to listen on for srm requests
+interfaces=eth0
 
 # node of this server
 node=0
-
-# IP address of this server
-hostip=172.16.1.1
 
 # list of volumes available to all clients
 volumes=SYSTEMS;SRM
