@@ -620,7 +620,7 @@ static int handle_srm_set_eof(struct srm_client *client,
 	uint32_t id, offset;
 	uint8_t whence;
 	int error = 0;
-	off_t pos;
+	off_t pos = 0;
 
 	offset = ntohl(request->offset);
 	whence = request->position_type ? SEEK_CUR : SEEK_SET;
@@ -993,10 +993,11 @@ static int handle_srm_open(struct srm_client *client,
 	srm_filetype_t filetype, opentype;
 	int32_t lif_type, bdat_size;
 	struct srm_volume *volume;
+	GString *filename = NULL;
 	struct stat stbuf = { 0 };
 	int fd = -1, error = 0;
 	off_t hdr_offset = 0;
-	GString *filename;
+
 	uint16_t gp[2];
 
 	opentype = ntohl(request->open_type);
@@ -1286,7 +1287,7 @@ static int handle_srm_createfile(struct srm_client *client,
 {
 	int fd = -1, type, error = 0;
 	struct srm_volume *volume;
-	GString *filename;
+	GString *filename = NULL;
 
 	type = ntohl(request->file_code);
 	volume = srm_volume_from_vh(client, &request->vh, &error);
@@ -1398,8 +1399,7 @@ static int handle_srm_purgelink(struct srm_client *client,
 	int error = SRM_ERRNO_NO_ERROR;
 	struct open_file_entry *entry;
 	struct srm_volume *volume;
-
-	GString *filename;
+	GString *filename = NULL;
 
 	volume = srm_volume_from_vh(client, &request->vh, &error);
 	if (!volume)

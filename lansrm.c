@@ -67,9 +67,9 @@ static void client_destroy(gpointer data)
 
 int main(int argc, char **argv)
 {
-	int ret, longind = 0;
-	GTree *clients;
-	GError *gerr;
+	int ret = 1, longind = 0;
+	GTree *clients = NULL;
+	GError *gerr = NULL;
 
 	config.keyfile = g_key_file_new();
 	if (g_key_file_load_from_file(config.keyfile, "/etc/srm.ini", G_KEY_FILE_NONE, &gerr)) {
@@ -77,6 +77,9 @@ int main(int argc, char **argv)
 		config.chroot = g_key_file_get_string(config.keyfile, "global", "chroot", NULL);
 		config.root = g_key_file_get_string(config.keyfile, "global", "root", NULL);
 		config.foreground = g_key_file_get_boolean(config.keyfile, "global", "foreground", NULL);
+	} else {
+		dbgmsg(DBGMSG_ERROR, NULL, "%s: failed to parse /etc/srm.ini\n", argv[0]);
+		return 1;
 	}
 
 	for (;;) {
@@ -147,7 +150,8 @@ error:
 	srm_exit();
 	rmp_exit();
 	epoll_exit();
-	g_tree_destroy(clients);
+	if (clients)
+		g_tree_destroy(clients);
 	config_free(&config);
 	return ret;
 }
